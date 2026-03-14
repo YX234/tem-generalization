@@ -264,6 +264,19 @@ class TEMModel(nn.Module):
             hidden_dim=[2 * g for g in cfg['n_g']]
         )
 
+        # -- Direct observation -> g pathway (breaks memory bootstrap deadlock)
+        # Maps encoded observation directly to abstract state, bypassing memory.
+        # Provides observation-specific g from step 1, so p_inf is diverse
+        # and Hebbian memory receives meaningful write signals.
+        self.MLP_g_obs = MLP(
+            [cfg['n_x_c'] for _ in range(n_f)], cfg['n_g'],
+            hidden_dim=[2 * g for g in cfg['n_g']]
+        )
+        # Learned uncertainty for direct observation path (initialized at sigma ≈ 1.0)
+        self.logsig_g_obs = nn.ParameterList([
+            nn.Parameter(torch.zeros(cfg['n_g'][f])) for f in range(n_f)
+        ])
+
     # ====================================================================
     # Forward pass
     # ====================================================================
@@ -377,8 +390,8 @@ class TEMModel(nn.Module):
         p_x = self._attractor(x_, M_prev[1], cfg['p_retrieve_mask_inf'])
 
         # Infer abstract state: precision-weighted combination of
-        # path integration (g_gen) and memory retrieval (g_mem)
-        g = self._inf_g(p_x, g_gen_tuple, obs)
+        # path integration (g_gen), memory retrieval (g_mem), and direct observation (g_obs)
+        g = self._inf_g(p_x, g_gen_tuple, obs, x_c)
 
         # Prepare abstract state for memory
         g_ = self._g2g_(g)
@@ -463,12 +476,13 @@ class TEMModel(nn.Module):
         mu, sigma = self.decoder(x_compressed)
         return mu, sigma
 
-    def _inf_g(self, p_x, g_gen_tuple, obs):
-        """Infer abstract state from memory + path integration."""
+    def _inf_g(self, p_x, g_gen_tuple, obs, x_c):
+        """Infer abstract state from path integration + memory + direct observation."""
         cfg = self.cfg
         n_f = cfg['n_f']
         g_gen, sigma_g_path = g_gen_tuple
 
+        # Source 1: memory-retrieved g
         # From memory-retrieved p, extract g by summing over sensory prefs
         g_downsampled = [
             torch.matmul(p_x[f], cfg['W_repeat'][f].t())
@@ -494,12 +508,20 @@ class TEMModel(nn.Module):
             for f in range(n_f)
         ]
 
-        # Precision-weighted combination
+        # Source 2: direct observation -> g (memory-independent)
+        mu_g_obs = self.MLP_g_obs([x_c for _ in range(n_f)])
+        mu_g_obs = [torch.tanh(g) for g in mu_g_obs]
+        sigma_g_obs = [
+            torch.exp(self.logsig_g_obs[f]).unsqueeze(0).expand_as(g_gen[f])
+            for f in range(n_f)
+        ]
+
+        # 3-way precision-weighted combination: path integration + memory + observation
         g = []
         for f in range(n_f):
             mu, sigma = inv_var_weight(
-                [g_gen[f], mu_g_mem[f]],
-                [sigma_g_path[f], sigma_g_mem[f]]
+                [g_gen[f], mu_g_mem[f], mu_g_obs[f]],
+                [sigma_g_path[f], sigma_g_mem[f], sigma_g_obs[f]]
             )
             g.append(mu)
 
