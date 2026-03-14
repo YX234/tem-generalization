@@ -144,8 +144,10 @@ def make_config():
 
 def iteration_params(iteration, cfg):
     """Compute iteration-dependent hyperparameters (same schedule as original TEM)."""
-    eta = min((iteration + 1) / cfg['eta_it'], 1) * cfg['eta']
-    lamb = min((iteration + 1) / cfg['lambda_it'], 1) * cfg['lambda_']
+    eta_target = cfg.get('eta_target', cfg['eta'])
+    lambda_target = cfg.get('lambda_target', cfg['lambda_'])
+    eta = min((iteration + 1) / cfg['eta_it'], 1) * eta_target
+    lamb = min((iteration + 1) / cfg['lambda_it'], 1) * lambda_target
 
     p2g_scale_offset = 1 / (1 + np.exp(
         (iteration - cfg['p2g_sig_half_it']) / cfg['p2g_sig_scale_it']

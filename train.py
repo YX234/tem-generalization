@@ -76,6 +76,11 @@ def main():
 
     prev_iter = None
 
+    # Save original values that iteration_params needs as targets
+    # (the loop overwrites cfg['eta'] and cfg['lambda_'] each iteration)
+    cfg['eta_target'] = cfg['eta']
+    cfg['lambda_target'] = cfg['lambda_']
+
     # Training loop
     for iteration in range(cfg['train_iterations']):
         start_time = time.time()
