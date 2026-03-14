@@ -57,5 +57,7 @@ class ObservationDecoder(nn.Module):
         """x_decompressed: (batch, n_x_f[0]) -> mu, sigma: (batch, obs_dim)"""
         mu = self.mu_net(x_decompressed)
         log_var = self.log_var_net(x_decompressed)
-        sigma = torch.exp(0.5 * log_var)  # ensure positive
+        # Clamp log_var to prevent variance collapse (sigma >= ~0.1)
+        log_var = torch.clamp(log_var, min=-4.0, max=4.0)
+        sigma = torch.exp(0.5 * log_var)
         return mu, sigma
