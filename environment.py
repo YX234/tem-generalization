@@ -115,6 +115,9 @@ def collect_trajectories(envs, n_rollout, prev_obs=None):
 
     chunk = []
     resets = [False] * batch_size
+    # Track resets from the PREVIOUS step so chunk[t].resets means
+    # "a reset occurred before this observation" (not after).
+    prev_step_resets = [False] * batch_size
 
     for step in range(n_rollout):
         # Random actions for world model training (no policy yet)
@@ -124,10 +127,14 @@ def collect_trajectories(envs, n_rollout, prev_obs=None):
         obs_tensor = torch.tensor(np.stack(prev_obs), dtype=torch.float)
         action_tensor = torch.tensor(np.stack(actions), dtype=torch.float)
 
-        # Track which envs reset at this step (for mid-chunk state resets)
-        step_resets = [False] * batch_size
+        chunk.append({
+            'obs': obs_tensor,
+            'action': action_tensor,
+            'resets': prev_step_resets,
+        })
 
         # Step all environments
+        step_resets = [False] * batch_size
         new_obs = []
         for env_i, (env, action) in enumerate(zip(envs, actions)):
             obs, reward, terminated, truncated, info = env.step(action)
@@ -137,12 +144,7 @@ def collect_trajectories(envs, n_rollout, prev_obs=None):
                 step_resets[env_i] = True
             new_obs.append(obs)
 
-        chunk.append({
-            'obs': obs_tensor,
-            'action': action_tensor,
-            'resets': step_resets,
-        })
-
+        prev_step_resets = step_resets
         prev_obs = new_obs
 
     return chunk, prev_obs, resets
