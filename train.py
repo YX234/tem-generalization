@@ -107,19 +107,7 @@ def main():
             step_data['action'] = step_data['action'].to(device)
         loss_weights = loss_weights.to(device)
 
-        # Handle episode resets: signal new walks to model
-        if any(resets) and prev_iter is not None:
-            for env_i, was_reset in enumerate(resets):
-                if was_reset:
-                    # Reset memory and state for this environment
-                    for M in prev_iter[0].M:
-                        M[env_i, :, :] = 0
-                    for f, g_inf in enumerate(prev_iter[0].g_inf):
-                        g_inf[env_i, :] = model.g_init[f].detach()
-                    for f, x_inf in enumerate(prev_iter[0].x_inf):
-                        x_inf[env_i, :] = 0
-
-        # Forward pass
+        # Forward pass (mid-chunk resets are handled inside model.forward)
         steps = model(chunk, prev_iter)
 
         # Accumulate loss
@@ -136,7 +124,7 @@ def main():
 
         # Backward pass
         optimizer.zero_grad()
-        loss.backward(retain_graph=True)
+        loss.backward()
 
         # Gradient clipping
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['grad_clip'])

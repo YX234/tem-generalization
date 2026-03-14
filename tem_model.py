@@ -242,12 +242,6 @@ class TEMModel(nn.Module):
             hidden_dim=[2 * g for g in cfg['n_g']]
         )
 
-        # -- Memory retrieval uncertainty
-        self.MLP_sigma_p = MLP(
-            cfg['n_p'], cfg['n_p'],
-            activation=[torch.tanh, torch.exp]
-        )
-
         # -- g inference from memory-retrieved p
         self.MLP_mu_g_mem = MLP(
             cfg['n_g_subsampled'], cfg['n_g'],
@@ -289,6 +283,7 @@ class TEMModel(nn.Module):
         for step_data in chunk:
             obs = step_data['obs']
             action = step_data['action']
+            step_resets = step_data.get('resets', None)
 
             if steps is None:
                 # First step ever: initialize
@@ -297,6 +292,17 @@ class TEMModel(nn.Module):
 
             # Get previous iteration
             prev = steps[-1]
+
+            # Handle mid-chunk episode resets: zero memory and state
+            # for environments that terminated on the previous step
+            if step_resets is not None and any(step_resets):
+                for env_i, was_reset in enumerate(step_resets):
+                    if was_reset:
+                        for M in prev.M:
+                            M[env_i, :, :] = 0
+                        for f in range(self.cfg['n_f']):
+                            prev.g_inf[f][env_i, :] = self.g_init[f].detach()
+                            prev.x_inf[f][env_i, :] = 0
 
             # Run one TEM iteration
             L, M, g_gen, p_gen, x_gen, g_inf, p_inf, x_inf = self._iteration(
@@ -503,7 +509,7 @@ class TEMModel(nn.Module):
     def _x2x_(self, x):
         """Prepare sensory input for memory: normalize, reshape via W_tile."""
         cfg = self.cfg
-        normalised = [normalise(F.relu(x[f] - torch.mean(x[f]))) for f in range(cfg['n_f'])]
+        normalised = [normalise(F.relu(x[f] - torch.mean(x[f], dim=-1, keepdim=True))) for f in range(cfg['n_f'])]
         return [
             torch.sigmoid(self.w_p[f]) * torch.matmul(normalised[f], cfg['W_tile'][f])
             for f in range(cfg['n_f'])

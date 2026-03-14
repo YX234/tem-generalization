@@ -113,7 +113,7 @@ def make_config():
     # -- Loss ramp-up iterations
     cfg['loss_weights_p_g_it'] = 2000
     cfg['loss_weights_reg_p_it'] = 4000
-    cfg['loss_weights_reg_g_it'] = 40000000
+    cfg['loss_weights_reg_g_it'] = float('inf')  # never ramp down g regularization
     cfg['eta_it'] = 8000          # faster ramp than original (less data diversity)
     cfg['lambda_it'] = 200
 

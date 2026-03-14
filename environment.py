@@ -124,10 +124,8 @@ def collect_trajectories(envs, n_rollout, prev_obs=None):
         obs_tensor = torch.tensor(np.stack(prev_obs), dtype=torch.float)
         action_tensor = torch.tensor(np.stack(actions), dtype=torch.float)
 
-        chunk.append({
-            'obs': obs_tensor,
-            'action': action_tensor,
-        })
+        # Track which envs reset at this step (for mid-chunk state resets)
+        step_resets = [False] * batch_size
 
         # Step all environments
         new_obs = []
@@ -136,7 +134,14 @@ def collect_trajectories(envs, n_rollout, prev_obs=None):
             if terminated or truncated:
                 obs, _ = env.reset()
                 resets[env_i] = True
+                step_resets[env_i] = True
             new_obs.append(obs)
+
+        chunk.append({
+            'obs': obs_tensor,
+            'action': action_tensor,
+            'resets': step_resets,
+        })
 
         prev_obs = new_obs
 
