@@ -7,6 +7,7 @@ Adapted from torch_tem-main/run.py.
 import os
 import time
 import logging
+import pickle
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -76,6 +77,7 @@ def main():
         prev_obs.append(obs)
 
     prev_iter = None
+    carry_resets = None
 
     # Save original values that iteration_params needs as targets
     # (the loop overwrites cfg['eta'] and cfg['lambda_'] each iteration)
@@ -102,7 +104,8 @@ def main():
             pg['lr'] = lr
 
         # Collect trajectory chunk (on CPU from envs, then move to device)
-        chunk, prev_obs, resets = collect_trajectories(envs, cfg['n_rollout'], prev_obs, normalizer)
+        chunk, prev_obs, resets, carry_resets = collect_trajectories(
+            envs, cfg['n_rollout'], prev_obs, normalizer, carry_resets)
         for step_data in chunk:
             step_data['obs'] = step_data['obs'].to(device)
             step_data['obs_raw'] = step_data['obs_raw'].to(device)
@@ -184,11 +187,15 @@ def main():
         if iteration % cfg['save_interval'] == 0:
             torch.save(model.state_dict(), os.path.join(model_path, f'tem_{iteration}.pt'))
             torch.save(cfg, os.path.join(model_path, f'cfg_{iteration}.pt'))
+            with open(os.path.join(model_path, f'normalizer_{iteration}.pkl'), 'wb') as f:
+                pickle.dump(normalizer, f)
             logger.info(f"  Saved checkpoint at iteration {iteration}")
 
     # Final save
     torch.save(model.state_dict(), os.path.join(model_path, f'tem_final.pt'))
     torch.save(cfg, os.path.join(model_path, f'cfg_final.pt'))
+    with open(os.path.join(model_path, 'normalizer_final.pkl'), 'wb') as f:
+        pickle.dump(normalizer, f)
     logger.info("Training complete.")
 
     # Cleanup

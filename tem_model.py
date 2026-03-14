@@ -391,7 +391,7 @@ class TEMModel(nn.Module):
 
         # Infer abstract state: precision-weighted combination of
         # path integration (g_gen), memory retrieval (g_mem), and direct observation (g_obs)
-        g = self._inf_g(p_x, g_gen_tuple, obs, x_c)
+        g = self._inf_g(p_x, g_gen_tuple, obs, x_f)
 
         # Prepare abstract state for memory
         g_ = self._g2g_(g)
@@ -476,7 +476,7 @@ class TEMModel(nn.Module):
         mu, sigma = self.decoder(x_compressed)
         return mu, sigma
 
-    def _inf_g(self, p_x, g_gen_tuple, obs, x_c):
+    def _inf_g(self, p_x, g_gen_tuple, obs, x_f):
         """Infer abstract state from path integration + memory + direct observation."""
         cfg = self.cfg
         n_f = cfg['n_f']
@@ -509,7 +509,10 @@ class TEMModel(nn.Module):
         ]
 
         # Source 2: direct observation -> g (memory-independent)
-        mu_g_obs = self.MLP_g_obs([x_c for _ in range(n_f)])
+        # Each frequency module receives its own temporally-filtered x_f[f],
+        # preserving the timescale hierarchy (fast modules see raw obs,
+        # slow modules see smoothed obs).
+        mu_g_obs = self.MLP_g_obs(x_f)
         mu_g_obs = [torch.tanh(g) for g in mu_g_obs]
         sigma_g_obs = [
             torch.exp(self.logsig_g_obs[f]).unsqueeze(0).expand_as(g_gen[f])

@@ -116,7 +116,8 @@ class DomainRandomizedHopper:
         return self.env.action_space
 
 
-def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None):
+def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None,
+                         carry_resets=None):
     """Collect n_rollout steps from each environment using random actions.
 
     Args:
@@ -124,6 +125,7 @@ def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None):
         n_rollout: number of steps to collect
         prev_obs: list of previous observations (None if starting fresh)
         normalizer: optional RunningNormalizer for obs standardization
+        carry_resets: resets from last step of previous chunk (None if first call)
 
     Returns:
         chunk: list of n_rollout dicts, each with:
@@ -132,6 +134,7 @@ def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None):
             'action': (batch, action_dim) action tensor
         new_obs: list of current raw observations after collection
         resets: list of booleans indicating which envs were reset during collection
+        last_step_resets: resets from the last step (pass to next call as carry_resets)
     """
     batch_size = len(envs)
     obs_dim = envs[0].observation_space.shape[0]
@@ -148,7 +151,8 @@ def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None):
     resets = [False] * batch_size
     # Track resets from the PREVIOUS step so chunk[t].resets means
     # "a reset occurred before this observation" (not after).
-    prev_step_resets = [False] * batch_size
+    # carry_resets propagates resets from the last step of the previous chunk.
+    prev_step_resets = carry_resets if carry_resets is not None else [False] * batch_size
 
     for step in range(n_rollout):
         # Random actions for world model training (no policy yet)
@@ -186,4 +190,4 @@ def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None):
         prev_step_resets = step_resets
         prev_obs = new_obs
 
-    return chunk, prev_obs, resets
+    return chunk, prev_obs, resets, prev_step_resets
