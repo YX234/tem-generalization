@@ -29,7 +29,7 @@ def make_config():
     cfg['n_p'] = [g * x for g, x in zip(cfg['n_g_subsampled'], cfg['n_x_f'])]  # [192, 160, 128, 96]
 
     # -- Transition model
-    cfg['d_hidden_dim'] = 64  # increased from 20 for continuous dynamics
+    cfg['d_hidden_dim'] = 128  # direct delta prediction allows larger hidden layer
 
     # -- Hebbian memory
     cfg['eta'] = 0.5          # rate of remembering

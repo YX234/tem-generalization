@@ -217,22 +217,21 @@ class TEMModel(nn.Module):
             )) for f in range(n_f)
         ])
 
-        # -- STATE-DEPENDENT transition model D(a, g) -> delta_g
-        # Key adaptation: input includes continuous action AND connected g modules
+        # -- STATE-DEPENDENT transition model: (action, g_connected) -> delta_g
+        # Direct delta prediction replaces matrix formulation for better
+        # gradient flow (output dims drop from e.g. 3888 to 36 for module 0).
         transition_in_dims = []
-        transition_out_dims = []
         for f_to in range(n_f):
             g_in_dim = sum(cfg['n_g'][f_from] for f_from in range(n_f) if cfg['g_connections'][f_to][f_from])
-            transition_in_dims.append(cfg['action_dim'] + g_in_dim)  # action + state
-            transition_out_dims.append(g_in_dim * cfg['n_g'][f_to])  # transition matrix
+            transition_in_dims.append(cfg['action_dim'] + g_in_dim)
 
         self.MLP_D_a = MLP(
-            transition_in_dims, transition_out_dims,
+            transition_in_dims, cfg['n_g'],
             activation=[torch.tanh, None],
             hidden_dim=[cfg['d_hidden_dim'] for _ in range(n_f)],
-            bias=[True, False]
+            bias=[True, True]
         )
-        # Initialize output layer near zero so initial transition is identity
+        # Initialize output layer near zero so initial delta ≈ 0 (identity transition)
         self.MLP_D_a.set_weights(1, 0.0)
 
         # -- Transition uncertainty
@@ -426,7 +425,7 @@ class TEMModel(nn.Module):
     # ====================================================================
 
     def _gen_g(self, a_prev, g_prev):
-        """State-dependent transition: g_new = g_old + D(a, g) * g_old."""
+        """State-dependent transition: g_new = tanh(g_old + delta(a, g_connected))."""
         cfg = self.cfg
         n_f = cfg['n_f']
 
@@ -444,18 +443,11 @@ class TEMModel(nn.Module):
             for f_to in range(n_f)
         ]
 
-        # State-dependent transition: input is [action, g_connected]
+        # Direct delta prediction: MLP maps (action, g_connected) -> delta_g
         d_input = [torch.cat([a_prev, g_in[f]], dim=1) for f in range(n_f)]
-        D_a = self.MLP_D_a(d_input)
+        delta = self.MLP_D_a(d_input)
 
-        # Reshape to transition matrices and apply
-        g_step = []
-        for f_to in range(n_f):
-            g_in_dim = g_in[f_to].shape[1]
-            D_mat = D_a[f_to].reshape(-1, g_in_dim, cfg['n_g'][f_to])
-            delta = torch.squeeze(torch.matmul(g_in[f_to].unsqueeze(1), D_mat), 1)
-            g_new = torch.tanh(g_prev[f_to] + delta)
-            g_step.append(g_new)
+        g_step = [torch.tanh(g_prev[f] + delta[f]) for f in range(n_f)]
 
         # Transition uncertainty
         sigma_g = self.MLP_sigma_g_path(g_prev)
