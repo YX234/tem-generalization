@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from config import make_config, iteration_params
 from tem_model import TEMModel
-from environment import DomainRandomizedHopper, collect_trajectories
+from environment import DomainRandomizedHopper, RunningNormalizer, collect_trajectories
 
 
 def setup_logging(run_path):
@@ -67,6 +67,7 @@ def main():
 
     # Create environments with domain randomization
     envs = [DomainRandomizedHopper(cfg, seed=i) for i in range(cfg['batch_size'])]
+    normalizer = RunningNormalizer(cfg['obs_dim'])
 
     # Collect initial observations
     prev_obs = []
@@ -101,9 +102,10 @@ def main():
             pg['lr'] = lr
 
         # Collect trajectory chunk (on CPU from envs, then move to device)
-        chunk, prev_obs, resets = collect_trajectories(envs, cfg['n_rollout'], prev_obs)
+        chunk, prev_obs, resets = collect_trajectories(envs, cfg['n_rollout'], prev_obs, normalizer)
         for step_data in chunk:
             step_data['obs'] = step_data['obs'].to(device)
+            step_data['obs_raw'] = step_data['obs_raw'].to(device)
             step_data['action'] = step_data['action'].to(device)
         loss_weights = loss_weights.to(device)
 

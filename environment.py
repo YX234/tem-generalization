@@ -9,6 +9,35 @@ import torch
 import copy
 
 
+class RunningNormalizer:
+    """Online mean/std tracker for observation normalization."""
+
+    def __init__(self, dim, clip=10.0):
+        self.dim = dim
+        self.clip = clip
+        self.count = 0
+        self.mean = np.zeros(dim, dtype=np.float64)
+        self.var = np.ones(dim, dtype=np.float64)
+        self._M2 = np.zeros(dim, dtype=np.float64)
+
+    def update(self, batch):
+        """Update running stats with a batch of observations (N, dim)."""
+        batch = np.asarray(batch, dtype=np.float64)
+        for x in batch:
+            self.count += 1
+            delta = x - self.mean
+            self.mean += delta / self.count
+            delta2 = x - self.mean
+            self._M2 += delta * delta2
+        if self.count > 1:
+            self.var = self._M2 / (self.count - 1)
+
+    def normalize(self, obs):
+        """Normalize observation array using current stats."""
+        std = np.sqrt(self.var + 1e-8)
+        return np.clip((obs - self.mean) / std, -self.clip, self.clip).astype(np.float32)
+
+
 class DomainRandomizedHopper:
     """Wrapper around Hopper-v5 that randomizes body parameters on each reset."""
 
@@ -87,19 +116,21 @@ class DomainRandomizedHopper:
         return self.env.action_space
 
 
-def collect_trajectories(envs, n_rollout, prev_obs=None):
+def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None):
     """Collect n_rollout steps from each environment using random actions.
 
     Args:
         envs: list of DomainRandomizedHopper
         n_rollout: number of steps to collect
         prev_obs: list of previous observations (None if starting fresh)
+        normalizer: optional RunningNormalizer for obs standardization
 
     Returns:
         chunk: list of n_rollout dicts, each with:
-            'obs': (batch, obs_dim) tensor
-            'action': list of actions (one per env)
-        new_obs: list of current observations after collection
+            'obs': (batch, obs_dim) normalized observation tensor
+            'obs_raw': (batch, obs_dim) raw observation tensor (for loss)
+            'action': (batch, action_dim) action tensor
+        new_obs: list of current raw observations after collection
         resets: list of booleans indicating which envs were reset during collection
     """
     batch_size = len(envs)
@@ -124,11 +155,19 @@ def collect_trajectories(envs, n_rollout, prev_obs=None):
         actions = [env.action_space.sample() for env in envs]
 
         # Current observations as tensor
-        obs_tensor = torch.tensor(np.stack(prev_obs), dtype=torch.float)
+        raw = np.stack(prev_obs)
+        if normalizer is not None:
+            normalizer.update(raw)
+            normed = np.stack([normalizer.normalize(o) for o in prev_obs])
+        else:
+            normed = raw
+        obs_tensor = torch.tensor(normed, dtype=torch.float)
+        obs_raw_tensor = torch.tensor(raw, dtype=torch.float)
         action_tensor = torch.tensor(np.stack(actions), dtype=torch.float)
 
         chunk.append({
             'obs': obs_tensor,
+            'obs_raw': obs_raw_tensor,
             'action': action_tensor,
             'resets': prev_step_resets,
         })
