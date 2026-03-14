@@ -605,8 +605,9 @@ class TEMModel(nn.Module):
 
     def _gaussian_nll(self, target, mu, sigma):
         """Gaussian negative log-likelihood, summed over obs dims, per batch."""
+        log2pi = 1.8378770664093453  # log(2*pi)
         return torch.sum(
-            0.5 * ((target - mu) ** 2 / (sigma ** 2 + 1e-6) + torch.log(sigma ** 2 + 1e-6)),
+            0.5 * (log2pi + torch.log(sigma ** 2 + 1e-6) + (target - mu) ** 2 / (sigma ** 2 + 1e-6)),
             dim=-1
         )
 
