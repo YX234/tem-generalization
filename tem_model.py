@@ -441,7 +441,7 @@ class TEMModel(nn.Module):
             g_in_dim = g_in[f_to].shape[1]
             D_mat = D_a[f_to].reshape(-1, g_in_dim, cfg['n_g'][f_to])
             delta = torch.squeeze(torch.matmul(g_in[f_to].unsqueeze(1), D_mat), 1)
-            g_new = torch.clamp(g_prev[f_to] + delta, -1, 1)
+            g_new = torch.tanh(g_prev[f_to] + delta)
             g_step.append(g_new)
 
         # Transition uncertainty
@@ -487,7 +487,7 @@ class TEMModel(nn.Module):
             for g in mu_g_mem
         ]
 
-        mu_g_mem = [torch.clamp(g, -1, 1) for g in mu_g_mem]
+        mu_g_mem = [torch.tanh(g) for g in mu_g_mem]
         sigma_g_mem_raw = self.MLP_sigma_g_mem(sigma_g_input)
         sigma_g_mem = [
             sigma_g_mem_raw[f] + self.cfg['p2g_scale_offset'] * self.cfg['p2g_sig_val']
@@ -509,7 +509,7 @@ class TEMModel(nn.Module):
         """Infer grounded location from element-wise product of g_ and x_."""
         p = []
         for f in range(self.cfg['n_f']):
-            mu_p = leaky_relu(torch.clamp(g_[f] * x_[f], -1, 1))
+            mu_p = leaky_relu(torch.tanh(g_[f] * x_[f]))
             p.append(mu_p)
         return p
 
@@ -534,10 +534,10 @@ class TEMModel(nn.Module):
         return [torch.matmul(downsampled[f], cfg['W_repeat'][f]) for f in range(cfg['n_f'])]
 
     def _f_p(self, p):
-        """Activation for grounded location: clamp + leaky relu."""
+        """Activation for grounded location: tanh + leaky relu."""
         if isinstance(p, list):
-            return [leaky_relu(torch.clamp(p_f, -1, 1)) for p_f in p]
-        return leaky_relu(torch.clamp(p, -1, 1))
+            return [leaky_relu(torch.tanh(p_f)) for p_f in p]
+        return leaky_relu(torch.tanh(p))
 
     # ====================================================================
     # Hebbian memory and attractor dynamics
