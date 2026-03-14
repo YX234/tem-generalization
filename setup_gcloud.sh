@@ -1,32 +1,59 @@
 #!/bin/bash
-# Setup script for running TEM training on Google Cloud with A100 GPU
+# Setup script for running TEM training on Google Cloud with GPU
+#
+# Tries A100 first across multiple zones, falls back to T4 if unavailable.
 #
 # Usage (from your local machine):
-#   1. Install gcloud CLI: https://cloud.google.com/sdk/docs/install
+#   1. Install gcloud CLI
 #   2. gcloud auth login
 #   3. gcloud config set project YOUR_PROJECT_ID
 #   4. bash setup_gcloud.sh
-#
-# This will create a VM, SSH in, and start training.
-# To check on training later: gcloud compute ssh tem-train --zone=us-central1-a
 
 set -e
 
 INSTANCE_NAME="tem-train"
-ZONE="us-central1-a"
-MACHINE_TYPE="a2-highgpu-1g"  # 1x A100 40GB
+IMAGE_FAMILY="pytorch-2-7-cu128-ubuntu-2204-nvidia-570"
+IMAGE_PROJECT="deeplearning-platform-release"
 
-echo "=== Creating VM with A100 GPU ==="
-gcloud compute instances create $INSTANCE_NAME \
-  --zone=$ZONE \
-  --machine-type=$MACHINE_TYPE \
-  --accelerator=type=nvidia-tesla-a100,count=1 \
-  --image-family=pytorch-latest-gpu \
-  --image-project=deeplearning-platform-release \
-  --boot-disk-size=100GB \
-  --boot-disk-type=pd-ssd \
-  --maintenance-policy=TERMINATE \
-  --metadata=install-nvidia-driver=True
+# GPU configs to try in order (type, machine-type, zone)
+CONFIGS=(
+  "nvidia-tesla-a100,a2-highgpu-1g,us-central1-a"
+  "nvidia-tesla-a100,a2-highgpu-1g,us-east1-b"
+  "nvidia-tesla-a100,a2-highgpu-1g,us-west1-b"
+  "nvidia-tesla-a100,a2-highgpu-1g,europe-west4-a"
+  "nvidia-tesla-t4,n1-standard-8,us-central1-a"
+  "nvidia-tesla-t4,n1-standard-8,us-east1-b"
+  "nvidia-tesla-t4,n1-standard-8,us-west1-b"
+  "nvidia-tesla-t4,n1-standard-8,europe-west4-a"
+  "nvidia-tesla-t4,n1-standard-8,us-central1-f"
+)
+
+CREATED=false
+for config in "${CONFIGS[@]}"; do
+  IFS=',' read -r GPU MACHINE ZONE <<< "$config"
+  echo "=== Trying $GPU in $ZONE ($MACHINE) ==="
+  if gcloud compute instances create $INSTANCE_NAME \
+    --zone=$ZONE \
+    --machine-type=$MACHINE \
+    --accelerator=type=$GPU,count=1 \
+    --image-family=$IMAGE_FAMILY \
+    --image-project=$IMAGE_PROJECT \
+    --boot-disk-size=100GB \
+    --boot-disk-type=pd-ssd \
+    --maintenance-policy=TERMINATE \
+    --metadata=install-nvidia-driver=True 2>&1; then
+    CREATED=true
+    echo "=== Success: $GPU in $ZONE ==="
+    break
+  else
+    echo "--- $GPU unavailable in $ZONE, trying next... ---"
+  fi
+done
+
+if [ "$CREATED" = false ]; then
+  echo "ERROR: Could not create VM in any zone. Try again later."
+  exit 1
+fi
 
 echo "=== Waiting for VM to be ready ==="
 sleep 30
@@ -39,7 +66,9 @@ echo "=== Installing dependencies ==="
 pip install gymnasium[mujoco] mujoco 2>&1 | tail -3
 
 echo "=== Cloning repo ==="
-git clone https://github.com/YX234/tem-generalization.git
+if [ ! -d ~/tem-generalization ]; then
+  git clone https://github.com/YX234/tem-generalization.git
+fi
 cd tem-generalization
 
 echo "=== Verifying GPU ==="
@@ -49,14 +78,14 @@ echo "=== Starting training in tmux ==="
 tmux new-session -d -s train "cd ~/tem-generalization && python3 train.py 2>&1 | tee train_output.log"
 
 echo ""
-echo "=== Training started in tmux session 'train' ==="
-echo "To monitor: gcloud compute ssh tem-train --zone=us-central1-a -- tmux attach -t train"
-echo "To check logs: gcloud compute ssh tem-train --zone=us-central1-a -- tail -f ~/tem-generalization/train_output.log"
+echo "=== Training started in background tmux session ==="
 REMOTE_SCRIPT
 )"
 
 echo ""
-echo "=== VM is running. Training has started. ==="
+echo "============================================"
+echo "  VM running: $INSTANCE_NAME ($GPU in $ZONE)"
+echo "============================================"
 echo ""
 echo "Useful commands:"
 echo "  Monitor training:  gcloud compute ssh $INSTANCE_NAME --zone=$ZONE -- tmux attach -t train"
