@@ -295,14 +295,26 @@ class TEMModel(nn.Module):
 
             # Handle mid-chunk episode resets: zero memory and state
             # for environments that terminated on the previous step
+            # Use out-of-place ops to avoid breaking autograd
             if step_resets is not None and any(step_resets):
-                for env_i, was_reset in enumerate(step_resets):
-                    if was_reset:
-                        for M in prev.M:
-                            M[env_i, :, :] = 0
-                        for f in range(self.cfg['n_f']):
-                            prev.g_inf[f][env_i, :] = self.g_init[f].detach()
-                            prev.x_inf[f][env_i, :] = 0
+                reset_mask = torch.tensor(step_resets, dtype=torch.bool, device=self.device)
+                keep = (~reset_mask).float()
+                # Mask memories: zero out rows for reset envs
+                prev.M = [
+                    M * keep.view(-1, 1, 1)
+                    for M in prev.M
+                ]
+                # Reset g_inf to prior for reset envs, keep others
+                prev.g_inf = [
+                    keep.unsqueeze(1) * prev.g_inf[f] +
+                    reset_mask.float().unsqueeze(1) * self.g_init[f].detach().unsqueeze(0)
+                    for f in range(self.cfg['n_f'])
+                ]
+                # Zero out x_inf for reset envs
+                prev.x_inf = [
+                    prev.x_inf[f] * keep.unsqueeze(1)
+                    for f in range(self.cfg['n_f'])
+                ]
 
             # Run one TEM iteration
             L, M, g_gen, p_gen, x_gen, g_inf, p_inf, x_inf = self._iteration(
