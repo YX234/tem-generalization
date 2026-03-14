@@ -163,10 +163,22 @@ class Iteration:
 class TEMModel(nn.Module):
     """TEM-inspired world model for continuous control."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, device=None):
         super().__init__()
         self.cfg = copy.deepcopy(cfg)
+        self.device = device or torch.device('cpu')
         self._init_trainable()
+        # Move static config tensors to device
+        self._move_config_to_device()
+
+    def _move_config_to_device(self):
+        """Move all static tensors in config to the model's device."""
+        cfg = self.cfg
+        for key in ['W_repeat', 'W_tile', 'g_downsample',
+                     'p_retrieve_mask_inf', 'p_retrieve_mask_gen']:
+            if isinstance(cfg[key], list):
+                cfg[key] = [t.to(self.device) for t in cfg[key]]
+        cfg['p_update_mask'] = cfg['p_update_mask'].to(self.device)
 
     def _init_trainable(self):
         cfg = self.cfg
@@ -593,15 +605,15 @@ class TEMModel(nn.Module):
         # Empty Hebbian memories
         n_p_total = sum(cfg['n_p'])
         M = [
-            torch.zeros(batch_size, n_p_total, n_p_total),
-            torch.zeros(batch_size, n_p_total, n_p_total),
+            torch.zeros(batch_size, n_p_total, n_p_total, device=self.device),
+            torch.zeros(batch_size, n_p_total, n_p_total, device=self.device),
         ]
 
         # Prior on abstract state
         g_inf = [self.g_init[f].unsqueeze(0).expand(batch_size, -1).clone() for f in range(n_f)]
 
         # Zero initial filtered observation
-        x_inf = [torch.zeros(batch_size, cfg['n_x_f'][f]) for f in range(n_f)]
+        x_inf = [torch.zeros(batch_size, cfg['n_x_f'][f], device=self.device) for f in range(n_f)]
 
         return Iteration(obs=obs, action=None, M=M, x_inf=x_inf, g_inf=g_inf)
 
