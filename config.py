@@ -119,8 +119,8 @@ def make_config():
 
     # -- Inference parameters
     cfg['p2g_sig_val'] = 10000
-    cfg['p2g_sig_half_it'] = 400
-    cfg['p2g_sig_scale_it'] = 200
+    cfg['p2g_sig_half_it'] = 6000    # don't trust memory-derived g until memory is built
+    cfg['p2g_sig_scale_it'] = 1000   # slower transition to avoid noisy gradient phase
     cfg['p2g_scale_offset'] = 0
 
     # -- Model architecture
