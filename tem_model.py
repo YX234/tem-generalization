@@ -573,11 +573,11 @@ class TEMModel(nn.Module):
         # L_g: generated g vs inferred g
         L_g = torch.sum(torch.stack(squared_error(g_inf, g_gen), dim=0), dim=0)
 
-        # L_x: observation prediction losses (Gaussian NLL)
+        # L_x: observation prediction losses (MSE, summed over obs dims)
         # x_gen is ((mu_p, sig_p), (mu_g, sig_g), (mu_gt, sig_gt))
-        L_x_p = self._gaussian_nll(obs, x_gen[0][0], x_gen[0][1])
-        L_x_g = self._gaussian_nll(obs, x_gen[1][0], x_gen[1][1])
-        L_x_gen = self._gaussian_nll(obs, x_gen[2][0], x_gen[2][1])
+        L_x_p = torch.sum((obs - x_gen[0][0]) ** 2, dim=-1)
+        L_x_g = torch.sum((obs - x_gen[1][0]) ** 2, dim=-1)
+        L_x_gen = torch.sum((obs - x_gen[2][0]) ** 2, dim=-1)
 
         # Regularization
         L_reg_g = torch.sum(torch.stack([torch.sum(g ** 2, dim=1) for g in g_inf], dim=0), dim=0)
