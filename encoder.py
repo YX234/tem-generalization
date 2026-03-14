@@ -57,7 +57,8 @@ class ObservationDecoder(nn.Module):
         """x_decompressed: (batch, n_x_f[0]) -> mu, sigma: (batch, obs_dim)"""
         mu = self.mu_net(x_decompressed)
         log_var = self.log_var_net(x_decompressed)
-        # Clamp log_var to prevent variance collapse (sigma >= ~0.1)
-        log_var = torch.clamp(log_var, min=-4.0, max=4.0)
+        # Clamp log_var so NLL stays non-negative: log(σ²) >= -log(2π) ≈ -1.84
+        # This sets σ_min ≈ 0.40, making the per-dim NLL floor ≈ 0
+        log_var = torch.clamp(log_var, min=-1.84, max=4.0)
         sigma = torch.exp(0.5 * log_var)
         return mu, sigma
