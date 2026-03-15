@@ -54,7 +54,7 @@ class ObservationDecoder(nn.Module):
         )
 
     def forward(self, x_decompressed):
-        """x_decompressed: (batch, n_x_f[0]) -> mu, sigma: (batch, obs_dim)"""
+        """x_decompressed: (batch, n_x_c * n_f) -> mu, sigma: (batch, obs_dim)"""
         mu = self.mu_net(x_decompressed)
         log_var = self.log_var_net(x_decompressed)
         # Clamp log_var so NLL stays non-negative: log(σ²) >= -log(2π) ≈ -1.84

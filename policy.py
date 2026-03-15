@@ -82,7 +82,7 @@ class ActorCritic(nn.Module):
         action_raw = torch.atanh(actions_clamped)
 
         log_prob = dist.log_prob(action_raw)
-        log_prob -= torch.log(1 - actions.pow(2) + 1e-6)
+        log_prob -= torch.log(1 - actions_clamped.pow(2) + 1e-6)
         log_prob = log_prob.sum(dim=-1)
 
         value = self.value_net(obs).squeeze(-1)
