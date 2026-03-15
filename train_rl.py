@@ -4,7 +4,7 @@ PPO training with TEM representations for domain-randomized Hopper.
 Usage:
     python train_rl.py --model-dir runs/<run>/models/
 
-The policy receives g_inf (108-dim abstract state) from the frozen TEM
+The policy receives g_inf (54-dim abstract state) from the frozen TEM
 and learns to produce Hopper actions via PPO.
 """
 

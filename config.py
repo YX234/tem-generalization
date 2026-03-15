@@ -85,22 +85,22 @@ def make_config():
     ]
 
     # -- Training parameters
-    cfg['train_iterations'] = 40000
+    cfg['train_iterations'] = 80000
     cfg['n_rollout'] = 50         # steps per BPTT chunk
-    cfg['batch_size'] = 16
+    cfg['batch_size'] = 32
     cfg['episode_length'] = 500   # max steps per episode before reset
     cfg['grad_clip'] = 1.0
 
     # -- Learning rate schedule
     cfg['lr_max'] = 3e-4
-    cfg['lr_min'] = 1e-5
+    cfg['lr_min'] = 5e-6
     cfg['lr_decay_rate'] = 0.7
-    cfg['lr_decay_steps'] = 6000
+    cfg['lr_decay_steps'] = 12000
 
     # -- Loss weights: [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse]
     cfg['loss_weights_p'] = 0.02
     cfg['loss_weights_x'] = 1.0
-    cfg['loss_weights_g'] = 1.0
+    cfg['loss_weights_g'] = 0.3
     cfg['loss_weights_reg_g'] = 0.01
     cfg['loss_weights_reg_p'] = 0.02
     cfg['loss_weights_x_mse'] = 0.5
@@ -116,13 +116,13 @@ def make_config():
     cfg['loss_weights_p_g_it'] = 2000
     cfg['loss_weights_reg_p_it'] = 4000
     cfg['loss_weights_reg_g_it'] = float('inf')  # never ramp down g regularization
-    cfg['eta_it'] = 4000          # faster ramp — memory reaches full strength earlier
+    cfg['eta_it'] = 3000          # engage memory earlier — adaptive precision handles novelty
     cfg['lambda_it'] = 200
 
     # -- Inference parameters
     cfg['p2g_sig_val'] = 10000
-    cfg['p2g_sig_half_it'] = 6000    # don't trust memory-derived g until memory is built
-    cfg['p2g_sig_scale_it'] = 1000   # slower transition to avoid noisy gradient phase
+    cfg['p2g_sig_half_it'] = 3000    # engage memory trust earlier — adaptive precision handles novelty
+    cfg['p2g_sig_scale_it'] = 500    # sharper transition
     cfg['p2g_scale_offset'] = 0
 
     # -- Model architecture
@@ -133,10 +133,19 @@ def make_config():
     # -- Domain randomization ranges (multipliers on default values)
     cfg['randomize'] = True
     cfg['terminate_when_unhealthy'] = False  # allow full state-space coverage during pretraining
-    cfg['mass_range'] = (0.5, 2.0)
-    cfg['damping_range'] = (0.5, 2.0)
-    cfg['friction_range'] = (0.5, 2.0)
-    cfg['gear_range'] = (0.5, 2.0)
+    cfg['mass_range'] = (0.25, 4.0)
+    cfg['damping_range'] = (0.2, 5.0)
+    cfg['friction_range'] = (0.1, 5.0)
+    cfg['gear_range'] = (0.25, 4.0)
+    cfg['gravity_range'] = (0.4, 2.5)
+
+    # -- Held-out evaluation ranges (beyond training distribution)
+    cfg['eval_gravity_range'] = (2.5, 4.0)
+    cfg['eval_friction_range'] = (0.02, 0.1)
+    cfg['eval_mass_range'] = (4.0, 8.0)
+
+    # -- Transition error EMA for adaptive precision weighting
+    cfg['transition_err_ema_decay'] = 0.95  # ~20-step time constant
 
     # -- Logging
     cfg['log_interval'] = 10

@@ -17,6 +17,7 @@ class TEMState:
     M: list       # [M_gen, M_inf] Hebbian memories
     x_inf: list   # n_f filtered observation tensors
     g_inf: list   # n_f abstract state tensors
+    transition_err_ema: list  # n_f transition error EMA tensors (or None)
 
     @staticmethod
     def initial(model):
@@ -32,13 +33,14 @@ class TEMState:
             ],
             g_inf=[model.g_init[f].detach().unsqueeze(0).clone() for f in range(n_f)],
             x_inf=[torch.zeros(1, cfg['n_x_f'][f], device=device) for f in range(n_f)],
+            transition_err_ema=None,
         )
 
 
 class TEMObservationEnv(gym.Env):
     """Gymnasium env wrapping Hopper + frozen TEM.
 
-    Returns g_inf (abstract state, 108-dim) as observations.
+    Returns g_inf (abstract state, 54-dim) as observations.
     Manages TEM internal state (Hebbian memory, temporal filtering)
     across steps and episode boundaries.
     """
@@ -63,10 +65,12 @@ class TEMObservationEnv(gym.Env):
 
         obs_tensor = self._normalize_to_tensor(obs_raw)
         with torch.no_grad():
-            g_inf, x_inf, M = self.tem.step_inference(
-                obs_tensor, None, self.state.M, self.state.x_inf, self.state.g_inf
+            g_inf, x_inf, M, new_ema = self.tem.step_inference(
+                obs_tensor, None, self.state.M, self.state.x_inf, self.state.g_inf,
+                self.state.transition_err_ema
             )
-        self.state = TEMState(M=M, x_inf=x_inf, g_inf=g_inf)
+        self.state = TEMState(M=M, x_inf=x_inf, g_inf=g_inf,
+                              transition_err_ema=new_ema)
         return self._g_to_numpy(g_inf), info
 
     def step(self, action):
@@ -78,11 +82,13 @@ class TEMObservationEnv(gym.Env):
         ).unsqueeze(0)
 
         with torch.no_grad():
-            g_inf, x_inf, M = self.tem.step_inference(
+            g_inf, x_inf, M, new_ema = self.tem.step_inference(
                 obs_tensor, a_tensor,
-                self.state.M, self.state.x_inf, self.state.g_inf
+                self.state.M, self.state.x_inf, self.state.g_inf,
+                self.state.transition_err_ema
             )
-        self.state = TEMState(M=M, x_inf=x_inf, g_inf=g_inf)
+        self.state = TEMState(M=M, x_inf=x_inf, g_inf=g_inf,
+                              transition_err_ema=new_ema)
         return self._g_to_numpy(g_inf), reward, terminated, truncated, info
 
     def _normalize_to_tensor(self, obs_raw):

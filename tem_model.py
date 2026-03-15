@@ -122,7 +122,8 @@ class Iteration:
 
     def __init__(self, obs=None, action=None, L=None, M=None,
                  g_gen=None, p_gen=None, x_gen=None,
-                 x_inf=None, g_inf=None, p_inf=None):
+                 x_inf=None, g_inf=None, p_inf=None,
+                 transition_err_ema=None):
         self.obs = obs
         self.action = action
         self.L = L
@@ -133,6 +134,7 @@ class Iteration:
         self.x_inf = x_inf      # temporally filtered obs per freq
         self.g_inf = g_inf       # inferred abstract state per freq
         self.p_inf = p_inf       # inferred grounded state per freq
+        self.transition_err_ema = transition_err_ema  # EMA of |g_inf - g_gen| per freq
 
     def detach(self):
         if self.L is not None:
@@ -153,6 +155,8 @@ class Iteration:
             self.g_inf = [t.detach() for t in self.g_inf]
         if self.p_inf is not None:
             self.p_inf = [t.detach() for t in self.p_inf]
+        if self.transition_err_ema is not None:
+            self.transition_err_ema = [t.detach() for t in self.transition_err_ema]
         return self
 
 
@@ -234,11 +238,11 @@ class TEMModel(nn.Module):
         # Initialize output layer near zero so initial delta ≈ 0 (identity transition)
         self.MLP_D_a.set_weights(1, 0.0)
 
-        # -- Transition uncertainty
+        # -- Transition uncertainty (input = g_prev concatenated with transition_err_ema)
         self.MLP_sigma_g_path = MLP(
-            cfg['n_g'], cfg['n_g'],
+            [2 * g for g in cfg['n_g']], cfg['n_g'],
             activation=[torch.tanh, torch.exp],
-            hidden_dim=[2 * g for g in cfg['n_g']]
+            hidden_dim=[3 * g for g in cfg['n_g']]
         )
 
         # -- g inference from memory-retrieved p
@@ -327,23 +331,32 @@ class TEMModel(nn.Module):
                     prev.x_inf[f] * keep.unsqueeze(1)
                     for f in range(self.cfg['n_f'])
                 ]
+                # Zero transition error EMA for reset envs
+                if prev.transition_err_ema is not None:
+                    prev.transition_err_ema = [
+                        keep.unsqueeze(1) * prev.transition_err_ema[f]
+                        for f in range(self.cfg['n_f'])
+                    ]
 
             # Run one TEM iteration
-            L, M, g_gen, p_gen, x_gen, g_inf, p_inf, x_inf = self._iteration(
-                obs, prev.action, prev.M, prev.x_inf, prev.g_inf
+            L, M, g_gen, p_gen, x_gen, g_inf, p_inf, x_inf, new_ema = self._iteration(
+                obs, prev.action, prev.M, prev.x_inf, prev.g_inf,
+                prev.transition_err_ema
             )
 
             steps.append(Iteration(
                 obs=obs, action=action, L=L, M=M,
                 g_gen=g_gen, p_gen=p_gen, x_gen=x_gen,
-                x_inf=x_inf, g_inf=g_inf, p_inf=p_inf
+                x_inf=x_inf, g_inf=g_inf, p_inf=p_inf,
+                transition_err_ema=new_ema
             ))
 
         # Remove initialization step
         steps = steps[1:]
         return steps
 
-    def step_inference(self, obs, a_prev, M_prev, x_prev, g_prev):
+    def step_inference(self, obs, a_prev, M_prev, x_prev, g_prev,
+                       transition_err_ema=None):
         """Single-step inference for RL: returns g_inf without loss or decoding.
 
         Runs only the inference path + Hebbian memory update, skipping the
@@ -355,14 +368,18 @@ class TEMModel(nn.Module):
             M_prev: [M_gen, M_inf] Hebbian memories
             x_prev: list of n_f filtered observation tensors
             g_prev: list of n_f abstract state tensors
+            transition_err_ema: list of n_f EMA tensors or None
 
         Returns:
             g_inf: list of n_f inferred abstract state tensors
             x_inf: list of n_f updated filtered observation tensors
             M: [M_gen, M_inf] updated Hebbian memories
+            new_ema: list of n_f updated transition error EMA tensors
         """
+        n_f = self.cfg['n_f']
+
         # Transition prediction (needed for precision-weighted g inference)
-        g_gen, g_gen_sigma = self._gen_g(a_prev, g_prev)
+        g_gen, g_gen_sigma = self._gen_g(a_prev, g_prev, transition_err_ema)
 
         # Inference path: encode, filter, retrieve, infer g and p
         x_inf, g_inf, p_inf_x, p_inf = self._inference(
@@ -379,12 +396,24 @@ class TEMModel(nn.Module):
             do_hierarchical=False
         ))
 
-        return g_inf, x_inf, M
+        # Update transition error EMA
+        with torch.no_grad():
+            terr = [torch.abs(g_inf[f] - g_gen[f]) for f in range(n_f)]
+            if transition_err_ema is not None:
+                decay = self.cfg['transition_err_ema_decay']
+                new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
+                           for f in range(n_f)]
+            else:
+                new_ema = terr
 
-    def _iteration(self, obs, a_prev, M_prev, x_prev, g_prev):
+        return g_inf, x_inf, M, new_ema
+
+    def _iteration(self, obs, a_prev, M_prev, x_prev, g_prev, transition_err_ema=None):
         """Single TEM iteration. Mirrors original model.iteration()."""
+        n_f = self.cfg['n_f']
+
         # Transition: predict next abstract state from action
-        g_gen, g_gen_sigma = self._gen_g(a_prev, g_prev)
+        g_gen, g_gen_sigma = self._gen_g(a_prev, g_prev, transition_err_ema)
 
         # Inference: infer abstract state from observation + memory
         x_inf, g_inf, p_inf_x, p_inf = self._inference(obs, M_prev, x_prev, (g_gen, g_gen_sigma))
@@ -403,7 +432,17 @@ class TEMModel(nn.Module):
         # Compute losses
         L = self._loss(g_gen, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x)
 
-        return L, M, g_gen, p_gen, x_gen, g_inf, p_inf, x_inf
+        # Update transition error EMA (detached — monitoring signal, not loss)
+        with torch.no_grad():
+            terr = [torch.abs(g_inf[f] - g_gen[f]) for f in range(n_f)]
+            if transition_err_ema is not None:
+                decay = self.cfg['transition_err_ema_decay']
+                new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
+                           for f in range(n_f)]
+            else:
+                new_ema = terr
+
+        return L, M, g_gen, p_gen, x_gen, g_inf, p_inf, x_inf, new_ema
 
     # ====================================================================
     # Inference path (bottom-up)
@@ -462,7 +501,7 @@ class TEMModel(nn.Module):
     # Component functions
     # ====================================================================
 
-    def _gen_g(self, a_prev, g_prev):
+    def _gen_g(self, a_prev, g_prev, transition_err_ema=None):
         """State-dependent transition: g_new = tanh(g_old + delta(a, g_connected))."""
         cfg = self.cfg
         n_f = cfg['n_f']
@@ -487,8 +526,14 @@ class TEMModel(nn.Module):
 
         g_step = [torch.tanh(g_prev[f] + delta[f]) for f in range(n_f)]
 
-        # Transition uncertainty
-        sigma_g = self.MLP_sigma_g_path(g_prev)
+        # Transition uncertainty — conditioned on recent prediction accuracy
+        if transition_err_ema is not None:
+            sigma_input = [torch.cat([g_prev[f], transition_err_ema[f]], dim=1)
+                           for f in range(n_f)]
+        else:
+            sigma_input = [torch.cat([g_prev[f], torch.zeros_like(g_prev[f])], dim=1)
+                           for f in range(n_f)]
+        sigma_g = self.MLP_sigma_g_path(sigma_input)
 
         return g_step, sigma_g
 
@@ -643,8 +688,10 @@ class TEMModel(nn.Module):
         # L_p_x: inferred p vs memory-retrieved p (from observation)
         L_p_x = torch.sum(torch.stack(squared_error(p_inf, p_inf_x), dim=0), dim=0)
 
-        # L_g: generated g vs inferred g
-        L_g = torch.sum(torch.stack(squared_error(g_inf, g_gen), dim=0), dim=0)
+        # L_g: train transition model to match observation-derived g;
+        # detach g_inf so gradients only update the transition model, not inference
+        L_g = torch.sum(torch.stack(
+            squared_error([g.detach() for g in g_inf], g_gen), dim=0), dim=0)
 
         # L_x: observation prediction losses (Gaussian NLL)
         # x_gen is ((mu_p, sig_p), (mu_g, sig_g), (mu_gt, sig_gt))

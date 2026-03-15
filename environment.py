@@ -56,6 +56,7 @@ class DomainRandomizedHopper:
         self.default_dof_damping = model.dof_damping.copy()
         self.default_geom_friction = model.geom_friction.copy()
         self.default_actuator_gear = model.actuator_gear.copy()
+        self.default_gravity = model.opt.gravity.copy()
 
         self.body_params = {}
 
@@ -97,6 +98,11 @@ class DomainRandomizedHopper:
         for i in range(len(self.default_actuator_gear)):
             model.actuator_gear[i, 0] = self.default_actuator_gear[i, 0] * self.rng.uniform(gear_lo, gear_hi)
 
+        # Randomize gravity
+        if self.cfg.get('gravity_range') is not None:
+            lo, hi = self.cfg['gravity_range']
+            model.opt.gravity[2] = self.default_gravity[2] * self.rng.uniform(lo, hi)
+
     def _get_body_params(self):
         """Return current body parameters as a dict for logging."""
         model = self.env.unwrapped.model
@@ -105,6 +111,7 @@ class DomainRandomizedHopper:
             'dof_damping': model.dof_damping.copy(),
             'geom_friction': model.geom_friction[:, 0].copy(),
             'actuator_gear': model.actuator_gear[:, 0].copy(),
+            'gravity_z': model.opt.gravity[2],
         }
 
     def close(self):

@@ -151,6 +151,18 @@ def main():
             mse_from_g_inf = np.mean([torch.mean((s.x_gen[1][0] - s.obs) ** 2).cpu().item() for s in steps])
             mse_from_g_gen = np.mean([torch.mean((s.x_gen[2][0] - s.obs) ** 2).cpu().item() for s in steps])
 
+            # Transition error EMA statistics
+            mean_ema = 0.0
+            mean_sigma_path = 0.0
+            ema_count = 0
+            for step in steps:
+                if step.transition_err_ema is not None:
+                    for f in range(cfg['n_f']):
+                        mean_ema += step.transition_err_ema[f].mean().cpu().item()
+                    ema_count += 1
+            if ema_count > 0:
+                mean_ema /= (ema_count * cfg['n_f'])
+
         elapsed = time.time() - start_time
 
         # Logging
@@ -183,6 +195,7 @@ def main():
             writer.add_scalar('Params/eta', eta, iteration)
             writer.add_scalar('Params/lambda', lamb, iteration)
             writer.add_scalar('Params/lr', lr, iteration)
+            writer.add_scalar('Dynamics/transition_err_ema', mean_ema, iteration)
 
         # Save checkpoint
         if iteration % cfg['save_interval'] == 0:
