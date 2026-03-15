@@ -16,10 +16,10 @@ class ObservationEncoder(nn.Module):
         obs_dim = cfg['obs_dim']
         n_x_c = cfg['n_x_c']
         self.net = nn.Sequential(
-            nn.Linear(obs_dim, 32),
-            nn.LayerNorm(32),
+            nn.Linear(obs_dim, 128),
+            nn.LayerNorm(128),
             nn.ELU(),
-            nn.Linear(32, n_x_c),
+            nn.Linear(128, n_x_c),
         )
 
     def forward(self, x_raw):

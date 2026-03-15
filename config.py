@@ -17,8 +17,8 @@ def make_config():
     # -- Frequency modules (timescale hierarchy for locomotion)
     # High freq first (fast balance), low freq last (slow trajectory)
     cfg['n_f'] = 4
-    cfg['n_g_subsampled'] = [12, 10, 8, 6]       # subsampled entorhinal cells per module
-    cfg['n_g'] = [3 * g for g in cfg['n_g_subsampled']]  # full entorhinal cells: [36, 30, 24, 18]
+    cfg['n_g_subsampled'] = [6, 5, 4, 3]         # subsampled entorhinal cells per module
+    cfg['n_g'] = [3 * g for g in cfg['n_g_subsampled']]  # full entorhinal cells: [18, 15, 12, 9]
     cfg['f_initial'] = [0.99, 0.3, 0.09, 0.03]   # temporal filtering rates
 
     # -- Sensory encoding
@@ -26,7 +26,7 @@ def make_config():
     cfg['n_x_f'] = [cfg['n_x_c'] for _ in range(cfg['n_f'])]  # filtered obs per freq
 
     # -- Grounded location (hippocampal place cells): outer product of g_sub x x_f
-    cfg['n_p'] = [g * x for g, x in zip(cfg['n_g_subsampled'], cfg['n_x_f'])]  # [192, 160, 128, 96]
+    cfg['n_p'] = [g * x for g, x in zip(cfg['n_g_subsampled'], cfg['n_x_f'])]  # [96, 80, 64, 48]
 
     # -- Transition model
     cfg['d_hidden_dim'] = 128  # direct delta prediction allows larger hidden layer
@@ -85,7 +85,7 @@ def make_config():
     ]
 
     # -- Training parameters
-    cfg['train_iterations'] = 20000
+    cfg['train_iterations'] = 40000
     cfg['n_rollout'] = 50         # steps per BPTT chunk
     cfg['batch_size'] = 16
     cfg['episode_length'] = 500   # max steps per episode before reset
@@ -98,7 +98,7 @@ def make_config():
     cfg['lr_decay_steps'] = 6000
 
     # -- Loss weights: [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse]
-    cfg['loss_weights_p'] = 1.0
+    cfg['loss_weights_p'] = 0.02
     cfg['loss_weights_x'] = 1.0
     cfg['loss_weights_g'] = 1.0
     cfg['loss_weights_reg_g'] = 0.01
@@ -116,7 +116,7 @@ def make_config():
     cfg['loss_weights_p_g_it'] = 2000
     cfg['loss_weights_reg_p_it'] = 4000
     cfg['loss_weights_reg_g_it'] = float('inf')  # never ramp down g regularization
-    cfg['eta_it'] = 8000          # faster ramp than original (less data diversity)
+    cfg['eta_it'] = 4000          # faster ramp — memory reaches full strength earlier
     cfg['lambda_it'] = 200
 
     # -- Inference parameters
@@ -132,10 +132,11 @@ def make_config():
 
     # -- Domain randomization ranges (multipliers on default values)
     cfg['randomize'] = True
+    cfg['terminate_when_unhealthy'] = False  # allow full state-space coverage during pretraining
     cfg['mass_range'] = (0.5, 2.0)
     cfg['damping_range'] = (0.5, 2.0)
     cfg['friction_range'] = (0.5, 2.0)
-    cfg['gear_range'] = (0.8, 1.2)
+    cfg['gear_range'] = (0.5, 2.0)
 
     # -- Logging
     cfg['log_interval'] = 10

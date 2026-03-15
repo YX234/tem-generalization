@@ -120,6 +120,7 @@ def main():
     for i in range(n_envs):
         env_cfg = tem_cfg.copy()
         env_cfg['randomize'] = rl_cfg['randomize']
+        env_cfg['terminate_when_unhealthy'] = True  # RL needs survival signal
         envs.append(TEMObservationEnv(env_cfg, tem, normalizer, device, seed=args.seed + i))
     logger.info(f"Created {n_envs} domain-randomized environments")
 

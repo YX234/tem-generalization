@@ -44,7 +44,10 @@ class DomainRandomizedHopper:
     def __init__(self, cfg, seed=None):
         self.cfg = cfg
         self.seed = seed
-        self.env = gym.make('Hopper-v5')
+        self.env = gym.make(
+            'Hopper-v5',
+            terminate_when_unhealthy=cfg.get('terminate_when_unhealthy', True),
+        )
         self.rng = np.random.RandomState(seed)
 
         # Store default model parameters for randomization reference
