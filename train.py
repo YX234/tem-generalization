@@ -117,7 +117,7 @@ def main():
 
         # Accumulate loss
         loss = torch.tensor(0.0, device=device)
-        plot_loss = np.zeros(8)
+        plot_loss = np.zeros(9)
 
         for step in steps:
             # step.L is list of 8 tensors each of shape (batch,)
@@ -165,13 +165,14 @@ def main():
             logger.info(
                 f"  Losses: p_g={plot_loss[0]:.2f} p_x={plot_loss[1]:.2f} "
                 f"x_gen={plot_loss[2]:.2f} x_g={plot_loss[3]:.2f} x_p={plot_loss[4]:.2f} "
-                f"g={plot_loss[5]:.2f} reg_g={plot_loss[6]:.2f} reg_p={plot_loss[7]:.2f}"
+                f"g={plot_loss[5]:.2f} reg_g={plot_loss[6]:.2f} reg_p={plot_loss[7]:.2f} "
+                f"x_mse={plot_loss[8]:.2f}"
             )
 
             # TensorBoard
             writer.add_scalar('Loss/total', loss.cpu().item(), iteration)
             for name, val in zip(
-                ['p_g', 'p_x', 'x_gen', 'x_g', 'x_p', 'g', 'reg_g', 'reg_p'],
+                ['p_g', 'p_x', 'x_gen', 'x_g', 'x_p', 'g', 'reg_g', 'reg_p', 'x_mse'],
                 plot_loss
             ):
                 writer.add_scalar(f'Loss/{name}', val, iteration)

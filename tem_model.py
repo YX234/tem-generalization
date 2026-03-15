@@ -198,7 +198,7 @@ class TEMModel(nn.Module):
 
         # -- Entorhinal preference weights (for p -> x decoding)
         self.w_x = nn.Parameter(torch.tensor(1.0))
-        self.b_x = nn.Parameter(torch.zeros(cfg['n_x_c']))
+        self.b_x = nn.Parameter(torch.zeros(cfg['n_x_c'] * cfg['n_f']))
 
         # -- Per-frequency sensory scaling
         self.w_p = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in range(n_f)])
@@ -407,15 +407,15 @@ class TEMModel(nn.Module):
     def _generative(self, M_prev, p_inf, g_inf, g_gen):
         """Generate observation predictions from inferred/generated states."""
         # From inferred grounded location -> observation
-        x_p = self._gen_x(p_inf[0])
+        x_p = self._gen_x(p_inf)
 
         # From inferred abstract location -> memory -> grounded -> observation
         p_g_inf = self._gen_p(g_inf, M_prev[0])
-        x_g = self._gen_x(p_g_inf[0])
+        x_g = self._gen_x(p_g_inf)
 
         # From generated abstract location -> memory -> grounded -> observation
         p_g_gen = self._gen_p(g_gen, M_prev[0])
-        x_gt = self._gen_x(p_g_gen[0])
+        x_gt = self._gen_x(p_g_gen)
 
         # x_gen is 3 (mu, sigma) tuples; p_gen is from inferred g
         return (x_p, x_g, x_gt), p_g_inf
@@ -460,11 +460,10 @@ class TEMModel(nn.Module):
         mu_p = self._attractor(g_, M_prev, self.cfg['p_retrieve_mask_gen'])
         return mu_p
 
-    def _gen_x(self, p):
-        """Generate observation prediction from highest-freq grounded location."""
-        # Sum over entorhinal preferences: p @ W_tile[0]^T
-        x_compressed = self.w_x * torch.matmul(p, self.cfg['W_tile'][0].t()) + self.b_x
-        # Decode to observation space
+    def _gen_x(self, p_list):
+        """Generate observation prediction from all frequency modules."""
+        x_parts = [torch.matmul(p_list[f], self.cfg['W_tile'][f].t()) for f in range(self.cfg['n_f'])]
+        x_compressed = self.w_x * torch.cat(x_parts, dim=-1) + self.b_x
         mu, sigma = self.decoder(x_compressed)
         return mu, sigma
 
@@ -484,7 +483,7 @@ class TEMModel(nn.Module):
 
         # Memory quality measures for uncertainty
         with torch.no_grad():
-            x_hat_mu, _ = self._gen_x(p_x[0])
+            x_hat_mu, _ = self._gen_x(p_x)
             err = squared_error(obs, x_hat_mu)
 
         sigma_g_input = [
@@ -538,7 +537,8 @@ class TEMModel(nn.Module):
     def _x2x_(self, x):
         """Prepare sensory input for memory: normalize, reshape via W_tile."""
         cfg = self.cfg
-        normalised = [normalise(F.relu(x[f] - torch.mean(x[f], dim=-1, keepdim=True))) for f in range(cfg['n_f'])]
+        centered = [x[f] - torch.mean(x[f], dim=-1, keepdim=True) for f in range(cfg['n_f'])]
+        normalised = [normalise(torch.tanh(centered[f])) for f in range(cfg['n_f'])]
         return [
             torch.sigmoid(self.w_p[f]) * torch.matmul(normalised[f], cfg['W_tile'][f])
             for f in range(cfg['n_f'])
@@ -598,7 +598,7 @@ class TEMModel(nn.Module):
     # ====================================================================
 
     def _loss(self, g_gen, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x):
-        """Compute all 8 loss components."""
+        """Compute all 9 loss components."""
         # L_p_g: inferred p vs generated p (from inferred g)
         L_p_g = torch.sum(torch.stack(squared_error(p_inf, p_gen), dim=0), dim=0)
 
@@ -618,7 +618,10 @@ class TEMModel(nn.Module):
         L_reg_g = torch.sum(torch.stack([torch.sum(g ** 2, dim=1) for g in g_inf], dim=0), dim=0)
         L_reg_p = torch.sum(torch.stack([torch.sum(torch.abs(p), dim=1) for p in p_inf], dim=0), dim=0)
 
-        return [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]
+        # L_x_mse: direct MSE on mu (bypasses sigma to prevent mean-collapse on velocities)
+        L_x_mse = torch.sum(F.mse_loss(x_gen[0][0], obs, reduction='none'), dim=-1)
+
+        return [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse]
 
     def _gaussian_nll(self, target, mu, sigma):
         """Gaussian negative log-likelihood, summed over obs dims, per batch."""

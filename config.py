@@ -94,20 +94,22 @@ def make_config():
     # -- Learning rate schedule
     cfg['lr_max'] = 3e-4
     cfg['lr_min'] = 1e-5
-    cfg['lr_decay_rate'] = 0.5
-    cfg['lr_decay_steps'] = 4000
+    cfg['lr_decay_rate'] = 0.7
+    cfg['lr_decay_steps'] = 6000
 
-    # -- Loss weights: [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p]
+    # -- Loss weights: [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse]
     cfg['loss_weights_p'] = 1.0
     cfg['loss_weights_x'] = 1.0
     cfg['loss_weights_g'] = 1.0
     cfg['loss_weights_reg_g'] = 0.01
     cfg['loss_weights_reg_p'] = 0.02
+    cfg['loss_weights_x_mse'] = 0.5
     cfg['loss_weights'] = torch.tensor([
         cfg['loss_weights_p'], cfg['loss_weights_p'],
         cfg['loss_weights_x'], cfg['loss_weights_x'], cfg['loss_weights_x'],
         cfg['loss_weights_g'],
-        cfg['loss_weights_reg_g'], cfg['loss_weights_reg_p']
+        cfg['loss_weights_reg_g'], cfg['loss_weights_reg_p'],
+        cfg['loss_weights_x_mse']
     ], dtype=torch.float)
 
     # -- Loss ramp-up iterations
@@ -170,6 +172,7 @@ def iteration_params(iteration, cfg):
     L_reg_g = (1 - min((iteration + 1) / cfg['loss_weights_reg_g_it'], 1)) * cfg['loss_weights_reg_g']
     L_reg_p = (1 - min((iteration + 1) / cfg['loss_weights_reg_p_it'], 1)) * cfg['loss_weights_reg_p']
 
-    loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p])
+    L_x_mse = cfg['loss_weights_x_mse']
+    loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse])
 
     return eta, lamb, p2g_scale_offset, lr, loss_weights

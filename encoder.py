@@ -35,22 +35,22 @@ class ObservationDecoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         obs_dim = cfg['obs_dim']
-        n_x_f_0 = cfg['n_x_f'][0]
+        n_x_total = cfg['n_x_c'] * cfg['n_f']  # all frequency modules concatenated
 
         # Learned weights for summing over entorhinal preferences (same as original w_x, b_x)
         # These are stored in the main TEM model; this decoder receives the
-        # already-transformed input of shape (batch, n_x_f[0])
+        # already-transformed input of shape (batch, n_x_c * n_f)
 
-        # Decompression: from temporally-filtered sensory space to observation space
+        # Decompression: from multi-frequency sensory space to observation space
         self.mu_net = nn.Sequential(
-            nn.Linear(n_x_f_0, 32),
+            nn.Linear(n_x_total, 64),
             nn.ELU(),
-            nn.Linear(32, obs_dim),
+            nn.Linear(64, obs_dim),
         )
         self.log_var_net = nn.Sequential(
-            nn.Linear(n_x_f_0, 32),
+            nn.Linear(n_x_total, 64),
             nn.ELU(),
-            nn.Linear(32, obs_dim),
+            nn.Linear(64, obs_dim),
         )
 
     def forward(self, x_decompressed):
