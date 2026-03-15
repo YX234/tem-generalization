@@ -181,6 +181,104 @@ def run_episode(model, env, normalizer, device, max_steps=200):
     }
 
 
+def run_mid_episode_change(model, env, normalizer, device, change_step,
+                           override_cfg, max_steps=400):
+    """Run an episode where physics change mid-episode without memory wipe.
+
+    Tests whether the EMA detects that the transition model has become wrong
+    and re-shifts trust to observation/memory pathways.
+
+    Args:
+        model: frozen TEM model
+        env: DomainRandomizedHopper (already reset with initial physics)
+        normalizer: observation normalizer
+        device: torch device
+        change_step: step at which to change physics
+        override_cfg: dict of range overrides for the new physics
+        max_steps: total steps (should be > change_step + recovery window)
+
+    Returns dict with per-step arrays:
+        mse, transition_err_ema: as in run_episode
+        change_step: the step at which physics changed
+        params_before, params_after: body_params dicts
+    """
+    cfg = model.cfg
+    n_f = cfg['n_f']
+
+    obs_raw, _ = env.reset()
+
+    params_before = env.body_params.copy()
+
+    n_p_total = sum(cfg['n_p'])
+    M = [
+        torch.zeros(1, n_p_total, n_p_total, device=device),
+        torch.zeros(1, n_p_total, n_p_total, device=device),
+    ]
+    g_inf = [model.g_init[f].detach().unsqueeze(0).clone() for f in range(n_f)]
+    x_inf = [torch.zeros(1, cfg['n_x_f'][f], device=device) for f in range(n_f)]
+    transition_err_ema = None
+    a_prev = None
+
+    mses = []
+    ema_vals = []
+    params_after = None
+
+    for step in range(max_steps):
+        # Change physics mid-episode (no reset, no memory wipe)
+        if step == change_step:
+            env.change_physics(override_cfg)
+            params_after = env.body_params.copy()
+
+        obs_normed = normalizer.normalize(obs_raw)
+        obs_tensor = torch.tensor(obs_normed, dtype=torch.float, device=device).unsqueeze(0)
+
+        with torch.no_grad():
+            g_gen, g_gen_sigma = model._gen_g(a_prev, g_inf, transition_err_ema)
+            x_f, g_new, p_inf_x, p_inf = model._inference(
+                obs_tensor, M, x_inf, (g_gen, g_gen_sigma)
+            )
+            x_gen, p_gen = model._generative(M, p_inf, g_new, g_gen)
+
+            mse = torch.mean((x_gen[0][0] - obs_tensor) ** 2).cpu().item()
+            mses.append(mse)
+
+            M_new = [model._hebbian(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+            M_new.append(model._hebbian(
+                M[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
+                do_hierarchical=False
+            ))
+
+            terr = [torch.abs(g_new[f] - g_gen[f]) for f in range(n_f)]
+            if transition_err_ema is not None:
+                decay = cfg['transition_err_ema_decay']
+                new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
+                           for f in range(n_f)]
+            else:
+                new_ema = terr
+
+            ema_vals.append(np.mean([new_ema[f].mean().cpu().item() for f in range(n_f)]))
+
+            action = env.env.action_space.sample()
+            a_prev = torch.tensor(action, dtype=torch.float, device=device).unsqueeze(0)
+
+            obs_raw, _, terminated, truncated, _ = env.step(action)
+            if terminated or truncated:
+                break
+
+            M = M_new
+            g_inf = g_new
+            x_inf = x_f
+            transition_err_ema = new_ema
+
+    return {
+        'mse': np.array(mses),
+        'transition_err_ema': np.array(ema_vals),
+        'change_step': change_step,
+        'params_before': params_before,
+        'params_after': params_after,
+    }
+
+
 def compute_metrics(mse_array):
     """Compute summary metrics from an adaptation curve."""
     metrics = {}
@@ -235,6 +333,10 @@ def main():
                         help='Output directory (default: model-dir/../eval)')
     parser.add_argument('--ablations', action='store_true',
                         help='Run ablation studies')
+    parser.add_argument('--mid-episode', action='store_true',
+                        help='Run mid-episode physics change tests')
+    parser.add_argument('--change-step', type=int, default=100,
+                        help='Step at which to change physics in mid-episode tests')
     args = parser.parse_args()
 
     np.random.seed(args.seed)
@@ -326,6 +428,104 @@ def main():
                 }
 
             all_results[f'ablation_{ablation}'] = ablation_results
+
+    # Mid-episode physics change tests
+    if args.mid_episode:
+        print("\n=== MID-EPISODE PHYSICS CHANGES ===")
+        change_step = args.change_step
+        # Total steps: enough to adapt before change + recover after
+        mid_max_steps = change_step + 200
+
+        # Define physics changes: start from default, switch to novel
+        mid_episode_configs = {
+            'default_to_heavy_gravity': {
+                'gravity_range': (3.0, 3.0),  # fixed 3x gravity
+                'mass_range': (1.0, 1.0),
+                'damping_range': (1.0, 1.0),
+                'friction_range': (1.0, 1.0),
+                'gear_range': (1.0, 1.0),
+            },
+            'default_to_low_friction': {
+                'friction_range': (0.05, 0.05),  # fixed 0.05x friction
+                'mass_range': (1.0, 1.0),
+                'damping_range': (1.0, 1.0),
+                'gravity_range': (1.0, 1.0),
+                'gear_range': (1.0, 1.0),
+            },
+            'default_to_heavy_mass': {
+                'mass_range': (5.0, 5.0),  # fixed 5x mass
+                'damping_range': (1.0, 1.0),
+                'friction_range': (1.0, 1.0),
+                'gravity_range': (1.0, 1.0),
+                'gear_range': (1.0, 1.0),
+            },
+            'default_to_all_extreme': {
+                'mass_range': (4.0, 4.0),
+                'gravity_range': (2.5, 2.5),
+                'friction_range': (0.1, 0.1),
+                'damping_range': (3.0, 3.0),
+                'gear_range': (0.3, 0.3),
+            },
+        }
+
+        mid_results = {}
+        for change_name, override in mid_episode_configs.items():
+            print(f"\n--- {change_name} (change at step {change_step}) ---")
+            episode_results = []
+
+            # Start with default physics (no randomization)
+            start_cfg = cfg.copy()
+            start_cfg['randomize'] = False
+            start_cfg['gravity_range'] = None
+            start_cfg['terminate_when_unhealthy'] = False
+
+            for ep in range(args.n_episodes):
+                env = DomainRandomizedHopper(start_cfg, seed=args.seed + ep + 1000)
+                result = run_mid_episode_change(
+                    model, env, normalizer, device,
+                    change_step=change_step,
+                    override_cfg={**override, 'randomize': True},
+                    max_steps=mid_max_steps,
+                )
+                episode_results.append(result)
+                env.close()
+
+            max_len = max(len(r['mse']) for r in episode_results)
+            mse_matrix = np.full((args.n_episodes, max_len), np.nan)
+            ema_matrix = np.full((args.n_episodes, max_len), np.nan)
+            for i, r in enumerate(episode_results):
+                mse_matrix[i, :len(r['mse'])] = r['mse']
+                ema_matrix[i, :len(r['transition_err_ema'])] = r['transition_err_ema']
+
+            mean_mse = np.nanmean(mse_matrix, axis=0)
+            mean_ema = np.nanmean(ema_matrix, axis=0)
+
+            # Metrics: before change, at spike, and after recovery
+            pre_mse = float(np.nanmean(mean_mse[max(0, change_step-20):change_step]))
+            if change_step + 5 <= len(mean_mse):
+                spike_mse = float(np.nanmax(mean_mse[change_step:change_step+20]))
+            else:
+                spike_mse = float('nan')
+            if change_step + 50 <= len(mean_mse):
+                recovery_mse = float(np.nanmean(mean_mse[change_step+50:change_step+100]))
+            else:
+                recovery_mse = float('nan')
+
+            print(f"  pre-change MSE:  {pre_mse:.4f}")
+            print(f"  spike MSE:       {spike_mse:.4f}")
+            print(f"  recovery MSE:    {recovery_mse:.4f}")
+            print(f"  spike ratio:     {spike_mse / (pre_mse + 1e-8):.2f}x")
+
+            mid_results[change_name] = {
+                'change_step': change_step,
+                'pre_mse': pre_mse,
+                'spike_mse': spike_mse,
+                'recovery_mse': recovery_mse,
+                'mean_mse_curve': mean_mse.tolist(),
+                'mean_ema_curve': mean_ema.tolist(),
+            }
+
+        all_results['mid_episode'] = mid_results
 
     # Save results
     results_path = os.path.join(output_dir, 'adaptation_results.json')

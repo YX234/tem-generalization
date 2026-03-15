@@ -74,6 +74,24 @@ class DomainRandomizedHopper:
         """Standard gymnasium step."""
         return self.env.step(action)
 
+    def change_physics(self, override_cfg=None):
+        """Re-randomize physics mid-episode without resetting simulation state.
+
+        Unlike reset(), this preserves the Hopper's current pose and velocity.
+        MuJoCo applies the new parameters on the next step() call.
+
+        Args:
+            override_cfg: optional dict with range overrides (e.g. {'gravity_range': (3.0, 4.0)}).
+                          If None, uses self.cfg ranges.
+        """
+        if override_cfg is not None:
+            old_cfg = self.cfg
+            self.cfg = {**self.cfg, **override_cfg}
+        self._randomize_body()
+        self.body_params = self._get_body_params()
+        if override_cfg is not None:
+            self.cfg = old_cfg
+
     def _randomize_body(self):
         """Randomize physics parameters within configured ranges."""
         model = self.env.unwrapped.model
