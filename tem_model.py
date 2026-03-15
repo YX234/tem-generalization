@@ -343,6 +343,44 @@ class TEMModel(nn.Module):
         steps = steps[1:]
         return steps
 
+    def step_inference(self, obs, a_prev, M_prev, x_prev, g_prev):
+        """Single-step inference for RL: returns g_inf without loss or decoding.
+
+        Runs only the inference path + Hebbian memory update, skipping the
+        observation decoder and loss computation for efficiency.
+
+        Args:
+            obs: (batch, obs_dim) normalized observation
+            a_prev: (batch, action_dim) or None (episode start)
+            M_prev: [M_gen, M_inf] Hebbian memories
+            x_prev: list of n_f filtered observation tensors
+            g_prev: list of n_f abstract state tensors
+
+        Returns:
+            g_inf: list of n_f inferred abstract state tensors
+            x_inf: list of n_f updated filtered observation tensors
+            M: [M_gen, M_inf] updated Hebbian memories
+        """
+        # Transition prediction (needed for precision-weighted g inference)
+        g_gen, g_gen_sigma = self._gen_g(a_prev, g_prev)
+
+        # Inference path: encode, filter, retrieve, infer g and p
+        x_inf, g_inf, p_inf_x, p_inf = self._inference(
+            obs, M_prev, x_prev, (g_gen, g_gen_sigma)
+        )
+
+        # Memory retrieval for Hebbian update (skip full _generative / decoder)
+        p_gen = self._gen_p(g_inf, M_prev[0])
+
+        # Update Hebbian memories
+        M = [self._hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+        M.append(self._hebbian(
+            M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
+            do_hierarchical=False
+        ))
+
+        return g_inf, x_inf, M
+
     def _iteration(self, obs, a_prev, M_prev, x_prev, g_prev):
         """Single TEM iteration. Mirrors original model.iteration()."""
         # Transition: predict next abstract state from action

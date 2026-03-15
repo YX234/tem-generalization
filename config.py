@@ -176,3 +176,34 @@ def iteration_params(iteration, cfg):
     loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse])
 
     return eta, lamb, p2g_scale_offset, lr, loss_weights
+
+
+def make_rl_config():
+    """PPO hyperparameters for RL training on TEM representations."""
+    cfg = {}
+
+    # PPO
+    cfg['n_envs'] = 8
+    cfg['n_steps'] = 2048
+    cfg['n_epochs'] = 10
+    cfg['minibatch_size'] = 64
+    cfg['gamma'] = 0.99
+    cfg['gae_lambda'] = 0.95
+    cfg['clip_epsilon'] = 0.2
+    cfg['lr'] = 3e-4
+    cfg['entropy_coeff'] = 0.0
+    cfg['value_coeff'] = 0.5
+    cfg['max_grad_norm'] = 0.5
+    cfg['total_timesteps'] = 1_000_000
+
+    # Policy architecture
+    cfg['hidden_dim'] = 256
+
+    # Environment
+    cfg['randomize'] = True
+
+    # Logging
+    cfg['log_interval'] = 1
+    cfg['save_interval'] = 10
+
+    return cfg
