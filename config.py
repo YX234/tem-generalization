@@ -94,7 +94,7 @@ def make_config():
     cfg['lr_max'] = 3e-4
     cfg['lr_min'] = 5e-6
     cfg['lr_decay_rate'] = 0.7
-    cfg['lr_decay_steps'] = 12000
+    cfg['lr_decay_steps'] = 4000
 
     # -- Loss weights: [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse, L_g_inv]
     cfg['loss_weights_p'] = 0.02
