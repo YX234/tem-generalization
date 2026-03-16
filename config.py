@@ -85,7 +85,7 @@ def make_config():
     ]
 
     # -- Training parameters
-    cfg['train_iterations'] = 80000
+    cfg['train_iterations'] = 30000
     cfg['n_rollout'] = 50         # steps per BPTT chunk
     cfg['batch_size'] = 32
     cfg['grad_clip'] = 1.0
