@@ -114,7 +114,7 @@ def make_config():
 
     # -- Loss ramp-up iterations
     cfg['loss_weights_p_g_it'] = 2000
-    cfg['loss_weights_g_it'] = 500   # transition model ramp (faster than p_g)
+    cfg['loss_weights_g_it'] = 1500  # transition model ramp (faster than p_g, but not so fast it locks in early)
     cfg['loss_weights_reg_p_it'] = 4000
     cfg['loss_weights_reg_g_it'] = float('inf')  # never ramp down g regularization
     cfg['eta_it'] = 3000          # engage memory earlier — adaptive precision handles novelty
