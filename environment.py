@@ -158,7 +158,6 @@ def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None,
     Returns:
         chunk: list of n_rollout dicts, each with:
             'obs': (batch, obs_dim) normalized observation tensor
-            'obs_raw': (batch, obs_dim) raw observation tensor (for loss)
             'action': (batch, action_dim) action tensor
         new_obs: list of current raw observations after collection
         resets: list of booleans indicating which envs were reset during collection
@@ -194,12 +193,10 @@ def collect_trajectories(envs, n_rollout, prev_obs=None, normalizer=None,
         else:
             normed = raw
         obs_tensor = torch.tensor(normed, dtype=torch.float)
-        obs_raw_tensor = torch.tensor(raw, dtype=torch.float)
         action_tensor = torch.tensor(np.stack(actions), dtype=torch.float)
 
         chunk.append({
             'obs': obs_tensor,
-            'obs_raw': obs_raw_tensor,
             'action': action_tensor,
             'resets': prev_step_resets,
         })

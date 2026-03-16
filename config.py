@@ -88,7 +88,6 @@ def make_config():
     cfg['train_iterations'] = 80000
     cfg['n_rollout'] = 50         # steps per BPTT chunk
     cfg['batch_size'] = 32
-    cfg['episode_length'] = 500   # max steps per episode before reset
     cfg['grad_clip'] = 1.0
 
     # -- Learning rate schedule
@@ -97,23 +96,25 @@ def make_config():
     cfg['lr_decay_rate'] = 0.7
     cfg['lr_decay_steps'] = 12000
 
-    # -- Loss weights: [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse]
+    # -- Loss weights: [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse, L_g_inv]
     cfg['loss_weights_p'] = 0.02
     cfg['loss_weights_x'] = 1.0
     cfg['loss_weights_g'] = 0.3
     cfg['loss_weights_reg_g'] = 0.01
     cfg['loss_weights_reg_p'] = 0.02
     cfg['loss_weights_x_mse'] = 0.5
+    cfg['loss_weights_g_inv'] = 0.01  # cross-environment g invariance penalty
     cfg['loss_weights'] = torch.tensor([
         cfg['loss_weights_p'], cfg['loss_weights_p'],
         cfg['loss_weights_x'], cfg['loss_weights_x'], cfg['loss_weights_x'],
         cfg['loss_weights_g'],
         cfg['loss_weights_reg_g'], cfg['loss_weights_reg_p'],
-        cfg['loss_weights_x_mse']
+        cfg['loss_weights_x_mse'], cfg['loss_weights_g_inv']
     ], dtype=torch.float)
 
     # -- Loss ramp-up iterations
     cfg['loss_weights_p_g_it'] = 2000
+    cfg['loss_weights_g_it'] = 500   # transition model ramp (faster than p_g)
     cfg['loss_weights_reg_p_it'] = 4000
     cfg['loss_weights_reg_g_it'] = float('inf')  # never ramp down g regularization
     cfg['eta_it'] = 3000          # engage memory earlier — adaptive precision handles novelty
@@ -132,7 +133,7 @@ def make_config():
 
     # -- Domain randomization ranges (multipliers on default values)
     cfg['randomize'] = True
-    cfg['terminate_when_unhealthy'] = False  # allow full state-space coverage during pretraining
+    cfg['terminate_when_unhealthy'] = True   # keep training on active locomotion, not fallen states
     cfg['mass_range'] = (0.25, 4.0)
     cfg['damping_range'] = (0.2, 5.0)
     cfg['friction_range'] = (0.1, 5.0)
@@ -173,17 +174,19 @@ def iteration_params(iteration, cfg):
 
     # Loss weights ramp-up
     ramp_pg = min((iteration + 1) / cfg['loss_weights_p_g_it'], 1)
+    ramp_g = min((iteration + 1) / cfg['loss_weights_g_it'], 1)
     L_p_g = ramp_pg * cfg['loss_weights_p']
     L_p_x = ramp_pg * cfg['loss_weights_p'] * (1 - p2g_scale_offset)
     L_x_gen = cfg['loss_weights_x']
     L_x_g = cfg['loss_weights_x']
     L_x_p = cfg['loss_weights_x']
-    L_g = ramp_pg * cfg['loss_weights_g']
+    L_g = ramp_g * cfg['loss_weights_g']
     L_reg_g = (1 - min((iteration + 1) / cfg['loss_weights_reg_g_it'], 1)) * cfg['loss_weights_reg_g']
     L_reg_p = (1 - min((iteration + 1) / cfg['loss_weights_reg_p_it'], 1)) * cfg['loss_weights_reg_p']
 
     L_x_mse = cfg['loss_weights_x_mse']
-    loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse])
+    L_g_inv = cfg['loss_weights_g_inv']
+    loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse, L_g_inv])
 
     return eta, lamb, p2g_scale_offset, lr, loss_weights
 

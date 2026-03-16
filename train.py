@@ -70,10 +70,20 @@ def main():
     envs = [DomainRandomizedHopper(cfg, seed=i) for i in range(cfg['batch_size'])]
     normalizer = RunningNormalizer(cfg['obs_dim'])
 
-    # Collect initial observations
+    # Stagger environments to de-synchronize episode boundaries.
+    # Without this, all envs reset at the same time, creating
+    # batch-correlated loss spikes every episode-length iterations.
+    stagger_rng = np.random.RandomState(42)
     prev_obs = []
     for env in envs:
         obs, _ = env.reset()
+        n_warmup = stagger_rng.randint(0, cfg['n_rollout'])
+        for _ in range(n_warmup):
+            normalizer.update(obs.reshape(1, -1))
+            action = env.action_space.sample()
+            obs, _, terminated, truncated, _ = env.step(action)
+            if terminated or truncated:
+                obs, _ = env.reset()
         prev_obs.append(obs)
 
     prev_iter = None
@@ -108,7 +118,6 @@ def main():
             envs, cfg['n_rollout'], prev_obs, normalizer, carry_resets)
         for step_data in chunk:
             step_data['obs'] = step_data['obs'].to(device)
-            step_data['obs_raw'] = step_data['obs_raw'].to(device)
             step_data['action'] = step_data['action'].to(device)
         loss_weights = loss_weights.to(device)
 
@@ -117,7 +126,7 @@ def main():
 
         # Accumulate loss
         loss = torch.tensor(0.0, device=device)
-        plot_loss = np.zeros(9)
+        plot_loss = np.zeros(10)
 
         for step in steps:
             # step.L is list of 9 tensors each of shape (batch,)
@@ -178,13 +187,13 @@ def main():
                 f"  Losses: p_g={plot_loss[0]:.2f} p_x={plot_loss[1]:.2f} "
                 f"x_gen={plot_loss[2]:.2f} x_g={plot_loss[3]:.2f} x_p={plot_loss[4]:.2f} "
                 f"g={plot_loss[5]:.2f} reg_g={plot_loss[6]:.2f} reg_p={plot_loss[7]:.2f} "
-                f"x_mse={plot_loss[8]:.2f}"
+                f"x_mse={plot_loss[8]:.2f} g_inv={plot_loss[9]:.2f}"
             )
 
             # TensorBoard
             writer.add_scalar('Loss/total', loss.cpu().item(), iteration)
             for name, val in zip(
-                ['p_g', 'p_x', 'x_gen', 'x_g', 'x_p', 'g', 'reg_g', 'reg_p', 'x_mse'],
+                ['p_g', 'p_x', 'x_gen', 'x_g', 'x_p', 'g', 'reg_g', 'reg_p', 'x_mse', 'g_inv'],
                 plot_loss
             ):
                 writer.add_scalar(f'Loss/{name}', val, iteration)

@@ -706,7 +706,15 @@ class TEMModel(nn.Module):
         # L_x_mse: direct MSE on mu (bypasses sigma to prevent mean-collapse on velocities)
         L_x_mse = torch.sum(F.mse_loss(x_gen[0][0], obs, reduction='none'), dim=-1)
 
-        return [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse]
+        # L_g_inv: cross-environment g invariance penalty
+        # Penalizes each batch element's g from deviating from the batch mean,
+        # providing pressure against encoding physics params into g.
+        L_g_inv = torch.sum(torch.stack([
+            torch.sum((g - g.mean(dim=0, keepdim=True)) ** 2, dim=-1)
+            for g in g_inf
+        ], dim=0), dim=0)
+
+        return [L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse, L_g_inv]
 
     def _gaussian_nll(self, target, mu, sigma):
         """Gaussian negative log-likelihood, summed over obs dims, per batch."""
@@ -724,7 +732,6 @@ class TEMModel(nn.Module):
         """Create initial Iteration with prior g and empty memory."""
         cfg = self.cfg
         n_f = cfg['n_f']
-        self.cfg['batch_size'] = batch_size
 
         # Empty Hebbian memories
         n_p_total = sum(cfg['n_p'])
@@ -742,14 +749,5 @@ class TEMModel(nn.Module):
         return Iteration(obs=obs, action=None, M=M, x_inf=x_inf, g_inf=g_inf)
 
     def _init_walks(self, prev_iter):
-        """Handle episode boundaries: reset memory and state for new episodes."""
-        if prev_iter is None:
-            return None
-
-        # Check for None actions indicating new episodes
-        prev = prev_iter[0]
-        if prev.action is None:
-            # All new: already initialized correctly
-            return prev_iter
-
+        """Return previous iteration state, or None to trigger initialization."""
         return prev_iter
