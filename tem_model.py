@@ -589,6 +589,7 @@ class TEMModel(nn.Module):
         sigma_g_mem_raw = self.MLP_sigma_g_mem(sigma_g_input)
         sigma_g_mem = [
             sigma_g_mem_raw[f] + self.cfg['p2g_scale_offset'] * self.cfg['p2g_sig_val']
+            + cfg.get('sigma_g_mem_floor', 0.35)
             for f in range(n_f)
         ]
 
