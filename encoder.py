@@ -34,6 +34,7 @@ class ObservationDecoder(nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
+        self.cfg = cfg
         obs_dim = cfg['obs_dim']
         n_x_total = cfg['n_x_c'] * cfg['n_f']  # all frequency modules concatenated
 
@@ -57,8 +58,6 @@ class ObservationDecoder(nn.Module):
         """x_decompressed: (batch, n_x_c * n_f) -> mu, sigma: (batch, obs_dim)"""
         mu = self.mu_net(x_decompressed)
         log_var = self.log_var_net(x_decompressed)
-        # Clamp log_var so NLL stays non-negative: log(σ²) >= -log(2π) ≈ -1.84
-        # This sets σ_min ≈ 0.40, making the per-dim NLL floor ≈ 0
-        log_var = torch.clamp(log_var, min=-1.84, max=4.0)
-        sigma = torch.exp(0.5 * log_var)
+        log_var = torch.clamp(log_var, max=4.0)
+        sigma = torch.exp(0.5 * log_var) + self.cfg.get('sigma_x_floor', 0.2)
         return mu, sigma
