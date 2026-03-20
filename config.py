@@ -147,6 +147,7 @@ def make_config():
 
     # -- Sigma floor: minimum transition uncertainty (prevents sigma collapse)
     cfg['sigma_g_floor'] = 0.3
+    cfg['sigma_g_obs_floor'] = 0.5  # observation path max precision = 4 (transition max = 11)
 
     # -- Transition error EMA for adaptive precision weighting
     cfg['transition_err_ema_decay'] = 0.95  # ~20-step time constant

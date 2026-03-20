@@ -227,7 +227,7 @@ class TEMModel(nn.Module):
         transition_in_dims = []
         for f_to in range(n_f):
             g_in_dim = sum(cfg['n_g'][f_from] for f_from in range(n_f) if cfg['g_connections'][f_to][f_from])
-            transition_in_dims.append(cfg['action_dim'] + g_in_dim)
+            transition_in_dims.append(cfg['action_dim'] + g_in_dim + cfg['n_g'][f_to])
 
         self.MLP_D_a = MLP(
             transition_in_dims, cfg['n_g'],
@@ -502,7 +502,10 @@ class TEMModel(nn.Module):
     # ====================================================================
 
     def _gen_g(self, a_prev, g_prev, transition_err_ema=None):
-        """State-dependent transition: g_new = tanh(g_old + delta(a, g_connected))."""
+        """State-dependent transition: g_new = tanh(g_old + delta(a, g_connected, ema_context)).
+
+        When transition_err_ema is provided, it conditions both the delta prediction
+        and the uncertainty estimate, enabling online adaptation to physics changes."""
         cfg = self.cfg
         n_f = cfg['n_f']
 
@@ -520,8 +523,14 @@ class TEMModel(nn.Module):
             for f_to in range(n_f)
         ]
 
-        # Direct delta prediction: MLP maps (action, g_connected) -> delta_g
-        d_input = [torch.cat([a_prev, g_in[f]], dim=1) for f in range(n_f)]
+        # Direct delta prediction: MLP maps (action, g_connected, ema_context) -> delta_g
+        if transition_err_ema is not None:
+            d_input = [torch.cat([a_prev, g_in[f], transition_err_ema[f]], dim=1)
+                       for f in range(n_f)]
+        else:
+            d_input = [torch.cat([a_prev, g_in[f],
+                        torch.zeros(a_prev.shape[0], cfg['n_g'][f], device=a_prev.device)], dim=1)
+                       for f in range(n_f)]
         delta = self.MLP_D_a(d_input)
 
         g_step = [torch.tanh(g_prev[f] + delta[f]) for f in range(n_f)]
@@ -591,6 +600,7 @@ class TEMModel(nn.Module):
         mu_g_obs = [torch.tanh(g) for g in mu_g_obs]
         sigma_g_obs = [
             torch.exp(self.logsig_g_obs[f]).unsqueeze(0).expand_as(g_gen[f])
+            + cfg.get('sigma_g_obs_floor', 0.5)
             for f in range(n_f)
         ]
 
