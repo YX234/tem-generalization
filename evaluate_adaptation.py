@@ -304,8 +304,8 @@ def run_ablation(model, cfg, env, normalizer, device, ablation_type, max_steps=2
         model.cfg['eta'] = 0.0
         model.cfg['lambda_'] = 0.0
     elif ablation_type == 'no_ema':
-        cfg['transition_err_ema_decay'] = None
-        model.cfg['transition_err_ema_decay'] = None
+        cfg['transition_err_ema_decay'] = 0.0
+        model.cfg['transition_err_ema_decay'] = 0.0
 
     result = run_episode(model, env, normalizer, device, max_steps)
 

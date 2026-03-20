@@ -32,7 +32,7 @@ from encoder import ObservationEncoder, ObservationDecoder
 def inv_var_weight(mus, sigmas):
     """Inverse-variance weighted mean of Gaussians."""
     mus = torch.stack(mus, dim=0)
-    sigmas = torch.stack(sigmas, dim=0)
+    sigmas = torch.clamp(torch.stack(sigmas, dim=0), min=1e-4)
     inv_var_var = 1.0 / torch.sum(1.0 / (sigmas ** 2), dim=0)
     inv_var_avg = torch.sum(mus / (sigmas ** 2), dim=0) * inv_var_var
     inv_var_sigma = torch.sqrt(inv_var_var)
@@ -430,7 +430,7 @@ class TEMModel(nn.Module):
         ))
 
         # Compute losses
-        L = self._loss(g_gen, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x)
+        L = self._loss(g_gen, g_gen_sigma, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x)
 
         # Update transition error EMA (detached — monitoring signal, not loss)
         with torch.no_grad():
@@ -534,6 +534,7 @@ class TEMModel(nn.Module):
             sigma_input = [torch.cat([g_prev[f], torch.zeros_like(g_prev[f])], dim=1)
                            for f in range(n_f)]
         sigma_g = self.MLP_sigma_g_path(sigma_input)
+        sigma_g = [s + cfg.get('sigma_g_floor', 0.3) for s in sigma_g]
 
         return g_step, sigma_g
 
@@ -680,18 +681,25 @@ class TEMModel(nn.Module):
     # Loss computation
     # ====================================================================
 
-    def _loss(self, g_gen, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x):
-        """Compute all 9 loss components."""
+    def _loss(self, g_gen, g_gen_sigma, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x):
+        """Compute all 10 loss components."""
         # L_p_g: inferred p vs generated p (from inferred g)
         L_p_g = torch.sum(torch.stack(squared_error(p_inf, p_gen), dim=0), dim=0)
 
         # L_p_x: inferred p vs memory-retrieved p (from observation)
         L_p_x = torch.sum(torch.stack(squared_error(p_inf, p_inf_x), dim=0), dim=0)
 
-        # L_g: train transition model to match observation-derived g;
-        # detach g_inf so gradients only update the transition model, not inference
-        L_g = torch.sum(torch.stack(
-            squared_error([g.detach() for g in g_inf], g_gen), dim=0), dim=0)
+        # L_g: Gaussian NLL — penalizes both overconfidence (small sigma, large error)
+        # and underconfidence (large sigma), naturally calibrating transition uncertainty.
+        # Detach g_inf so gradients only update the transition model, not inference.
+        n_f = self.cfg['n_f']
+        L_g = torch.sum(torch.stack([
+            torch.sum(0.5 * (
+                torch.log(g_gen_sigma[f] ** 2 + 1e-6) +
+                (g_inf[f].detach() - g_gen[f]) ** 2 / (g_gen_sigma[f] ** 2 + 1e-6)
+            ), dim=-1)
+            for f in range(n_f)
+        ], dim=0), dim=0)
 
         # L_x: observation prediction losses (Gaussian NLL)
         # x_gen is ((mu_p, sig_p), (mu_g, sig_g), (mu_gt, sig_gt))

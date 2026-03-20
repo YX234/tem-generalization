@@ -103,7 +103,7 @@ def make_config():
     cfg['loss_weights_reg_g'] = 0.01
     cfg['loss_weights_reg_p'] = 0.02
     cfg['loss_weights_x_mse'] = 0.5
-    cfg['loss_weights_g_inv'] = 0.01  # cross-environment g invariance penalty
+    cfg['loss_weights_g_inv'] = 0.1   # cross-environment g invariance penalty (strong pressure against encoding physics into g)
     cfg['loss_weights'] = torch.tensor([
         cfg['loss_weights_p'], cfg['loss_weights_p'],
         cfg['loss_weights_x'], cfg['loss_weights_x'], cfg['loss_weights_x'],
@@ -114,16 +114,16 @@ def make_config():
 
     # -- Loss ramp-up iterations
     cfg['loss_weights_p_g_it'] = 2000
-    cfg['loss_weights_g_it'] = 1500  # transition model ramp (faster than p_g, but not so fast it locks in early)
-    cfg['loss_weights_reg_p_it'] = 4000
+    cfg['loss_weights_g_it'] = 5000  # delay transition model; let memory establish first
+    cfg['loss_weights_reg_p_it'] = float('inf')  # never remove p sparsity — Hebbian memory needs it
     cfg['loss_weights_reg_g_it'] = float('inf')  # never ramp down g regularization
-    cfg['eta_it'] = 3000          # engage memory earlier — adaptive precision handles novelty
+    cfg['eta_it'] = 1500          # memory writes at full strength by iter 1500
     cfg['lambda_it'] = 200
 
     # -- Inference parameters
-    cfg['p2g_sig_val'] = 10000
-    cfg['p2g_sig_half_it'] = 3000    # engage memory trust earlier — adaptive precision handles novelty
-    cfg['p2g_sig_scale_it'] = 500    # sharper transition
+    cfg['p2g_sig_val'] = 100         # memory distrust magnitude reduced (was 10000)
+    cfg['p2g_sig_half_it'] = 1500    # memory trust sigmoid engages earlier
+    cfg['p2g_sig_scale_it'] = 300    # sharper memory trust transition
     cfg['p2g_scale_offset'] = 0
 
     # -- Model architecture
@@ -144,6 +144,9 @@ def make_config():
     cfg['eval_gravity_range'] = (2.5, 4.0)
     cfg['eval_friction_range'] = (0.02, 0.1)
     cfg['eval_mass_range'] = (4.0, 8.0)
+
+    # -- Sigma floor: minimum transition uncertainty (prevents sigma collapse)
+    cfg['sigma_g_floor'] = 0.3
 
     # -- Transition error EMA for adaptive precision weighting
     cfg['transition_err_ema_decay'] = 0.95  # ~20-step time constant
