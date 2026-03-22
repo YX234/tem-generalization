@@ -146,9 +146,9 @@ def make_config():
     cfg['eval_mass_range'] = (4.0, 8.0)
 
     # -- Sigma floor: minimum transition uncertainty (prevents sigma collapse)
-    cfg['sigma_g_floor'] = 0.3
-    cfg['sigma_g_obs_floor'] = 0.5  # observation path max precision = 4 (transition max = 11)
-    cfg['sigma_g_mem_floor'] = 0.35  # memory path max precision ≈ 8 (below transition max = 11)
+    cfg['sigma_g_floor'] = 0.5       # transition: lowest precision (max = 1/0.5^2 = 4.0)
+    cfg['sigma_g_obs_floor'] = 0.2   # observation: highest precision (max = 1/0.2^2 = 25.0)
+    cfg['sigma_g_mem_floor'] = 0.35  # memory: middle precision (max = 1/0.35^2 ≈ 8.2)
     cfg['sigma_x_floor'] = 0.2  # decoder floor: effective sigma_min ≈ 0.6 (prevents NLL gradient explosion)
 
     # -- Transition error EMA for adaptive precision weighting

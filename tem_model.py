@@ -134,7 +134,7 @@ class Iteration:
         self.x_inf = x_inf      # temporally filtered obs per freq
         self.g_inf = g_inf       # inferred abstract state per freq
         self.p_inf = p_inf       # inferred grounded state per freq
-        self.transition_err_ema = transition_err_ema  # EMA of |g_inf - g_gen| per freq
+        self.transition_err_ema = transition_err_ema  # EMA of obs prediction error per freq
 
     def detach(self):
         if self.L is not None:
@@ -396,9 +396,11 @@ class TEMModel(nn.Module):
             do_hierarchical=False
         ))
 
-        # Update transition error EMA
+        # Update transition error EMA based on observation prediction error
         with torch.no_grad():
-            terr = [torch.abs(g_inf[f] - g_gen[f]) for f in range(n_f)]
+            x_pred_mu, _ = self._gen_x(p_inf)  # [batch, obs_dim]
+            obs_err = torch.mean(torch.abs(x_pred_mu - obs), dim=-1, keepdim=True)  # [batch, 1]
+            terr = [obs_err.expand(-1, self.cfg['n_g'][f]) for f in range(n_f)]
             if transition_err_ema is not None:
                 decay = self.cfg['transition_err_ema_decay']
                 new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
@@ -432,9 +434,12 @@ class TEMModel(nn.Module):
         # Compute losses
         L = self._loss(g_gen, g_gen_sigma, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x)
 
-        # Update transition error EMA (detached — monitoring signal, not loss)
+        # Update transition error EMA based on observation prediction error
+        # (measures actual prediction accuracy against ground truth, not internal consistency)
         with torch.no_grad():
-            terr = [torch.abs(g_inf[f] - g_gen[f]) for f in range(n_f)]
+            x_pred_mu = x_gen[0][0]  # [batch, obs_dim] from inferred p pathway
+            obs_err = torch.mean(torch.abs(x_pred_mu - obs), dim=-1, keepdim=True)  # [batch, 1]
+            terr = [obs_err.expand(-1, self.cfg['n_g'][f]) for f in range(n_f)]
             if transition_err_ema is not None:
                 decay = self.cfg['transition_err_ema_decay']
                 new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]

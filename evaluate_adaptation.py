@@ -146,8 +146,10 @@ def run_episode(model, env, normalizer, device, max_steps=200):
                 do_hierarchical=False
             ))
 
-            # Update transition error EMA
-            terr = [torch.abs(g_new[f] - g_gen[f]) for f in range(n_f)]
+            # Update transition error EMA based on observation prediction error
+            x_pred_mu = x_gen[0][0]  # [1, obs_dim]
+            obs_err = torch.mean(torch.abs(x_pred_mu - obs_tensor), dim=-1, keepdim=True)
+            terr = [obs_err.expand(-1, cfg['n_g'][f]) for f in range(n_f)]
             if transition_err_ema is not None:
                 decay = cfg['transition_err_ema_decay']
                 new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
@@ -248,7 +250,9 @@ def run_mid_episode_change(model, env, normalizer, device, change_step,
                 do_hierarchical=False
             ))
 
-            terr = [torch.abs(g_new[f] - g_gen[f]) for f in range(n_f)]
+            x_pred_mu = x_gen[0][0]  # [1, obs_dim]
+            obs_err = torch.mean(torch.abs(x_pred_mu - obs_tensor), dim=-1, keepdim=True)
+            terr = [obs_err.expand(-1, cfg['n_g'][f]) for f in range(n_f)]
             if transition_err_ema is not None:
                 decay = cfg['transition_err_ema_decay']
                 new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
