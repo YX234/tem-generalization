@@ -129,10 +129,10 @@ def main():
         plot_loss = np.zeros(10)
 
         for step in steps:
-            # step.L is list of 9 tensors each of shape (batch,)
-            # loss_weights is (9,) — need to weight each component then sum over batch
-            stacked = torch.stack(step.L)  # (9, batch)
-            weighted = loss_weights.unsqueeze(1) * stacked  # (9, batch)
+            # step.L is list of 10 tensors each of shape (batch,)
+            # loss_weights is (10,) — weight each component then sum over batch
+            stacked = torch.stack(step.L)  # (10, batch)
+            weighted = loss_weights.unsqueeze(1) * stacked  # (10, batch)
             plot_loss += torch.sum(weighted, dim=1).detach().cpu().numpy()  # sum over batch
             loss = loss + torch.sum(weighted)
 

@@ -4,7 +4,7 @@ Adapted from torch_tem-main/model.py.
 
 Core components preserved from original TEM:
 - Multi-frequency modules with temporal filtering
-- Hebbian associative memory with attractor dynamics
+- Episodic buffer memory with attention-based retrieval
 - Factored representation: g (abstract state) x (observation) -> p (grounded state)
 - Inference/generative dual pathway
 
@@ -136,11 +136,23 @@ class Iteration:
         self.p_inf = p_inf       # inferred grounded state per freq
         self.transition_err_ema = transition_err_ema  # EMA of obs prediction error per freq
 
+    @staticmethod
+    def _detach_buf(buf):
+        """Detach an episodic buffer dict (or a plain tensor for backward compat)."""
+        if isinstance(buf, dict):
+            return {
+                'keys': buf['keys'].detach(),
+                'values': buf['values'].detach(),
+                'count': buf['count'],        # long tensor, no grad
+                'write_idx': buf['write_idx'],  # long tensor, no grad
+            }
+        return buf.detach()
+
     def detach(self):
         if self.L is not None:
             self.L = [t.detach() for t in self.L]
         if self.M is not None:
-            self.M = [t.detach() for t in self.M]
+            self.M = [self._detach_buf(b) for b in self.M]
         if self.g_gen is not None:
             self.g_gen = [t.detach() for t in self.g_gen]
         if self.p_gen is not None:
@@ -267,10 +279,15 @@ class TEMModel(nn.Module):
             hidden_dim=[2 * g for g in cfg['n_g']]
         )
 
+        # -- Episodic buffer attention temperature (learnable)
+        self.log_attn_temp = nn.Parameter(torch.tensor(
+            np.log(cfg.get('episodic_attn_init_temp', 1.0)), dtype=torch.float
+        ))
+
         # -- Direct observation -> g pathway (breaks memory bootstrap deadlock)
         # Maps encoded observation directly to abstract state, bypassing memory.
         # Provides observation-specific g from step 1, so p_inf is diverse
-        # and Hebbian memory receives meaningful write signals.
+        # and episodic memory receives meaningful write signals.
         self.MLP_g_obs = MLP(
             [cfg['n_x_c'] for _ in range(n_f)], cfg['n_g'],
             hidden_dim=[2 * g for g in cfg['n_g']]
@@ -315,10 +332,15 @@ class TEMModel(nn.Module):
             if step_resets is not None and any(step_resets):
                 reset_mask = torch.tensor(step_resets, dtype=torch.bool, device=self.device)
                 keep = (~reset_mask).float()
-                # Mask memories: zero out rows for reset envs
+                # Reset episodic buffers for terminated environments
                 prev.M = [
-                    M * keep.view(-1, 1, 1)
-                    for M in prev.M
+                    {
+                        'keys': buf['keys'] * keep.view(-1, 1, 1),
+                        'values': buf['values'] * keep.view(-1, 1, 1),
+                        'count': buf['count'] * (~reset_mask).long(),
+                        'write_idx': buf['write_idx'] * (~reset_mask).long(),
+                    }
+                    for buf in prev.M
                 ]
                 # Reset g_inf to prior for reset envs, keep others
                 prev.g_inf = [
@@ -359,13 +381,13 @@ class TEMModel(nn.Module):
                        transition_err_ema=None):
         """Single-step inference for RL: returns g_inf without loss or decoding.
 
-        Runs only the inference path + Hebbian memory update, skipping the
+        Runs only the inference path + episodic memory update, skipping the
         observation decoder and loss computation for efficiency.
 
         Args:
             obs: (batch, obs_dim) normalized observation
             a_prev: (batch, action_dim) or None (episode start)
-            M_prev: [M_gen, M_inf] Hebbian memories
+            M_prev: [M_gen, M_inf] episodic memory buffers
             x_prev: list of n_f filtered observation tensors
             g_prev: list of n_f abstract state tensors
             transition_err_ema: list of n_f EMA tensors or None
@@ -373,7 +395,7 @@ class TEMModel(nn.Module):
         Returns:
             g_inf: list of n_f inferred abstract state tensors
             x_inf: list of n_f updated filtered observation tensors
-            M: [M_gen, M_inf] updated Hebbian memories
+            M: [M_gen, M_inf] updated episodic memory buffers
             new_ema: list of n_f updated transition error EMA tensors
         """
         n_f = self.cfg['n_f']
@@ -386,19 +408,21 @@ class TEMModel(nn.Module):
             obs, M_prev, x_prev, (g_gen, g_gen_sigma)
         )
 
-        # Memory retrieval for Hebbian update (skip full _generative / decoder)
+        # Memory retrieval for update (skip full _generative / decoder)
         p_gen = self._gen_p(g_inf, M_prev[0])
 
-        # Update Hebbian memories
-        M = [self._hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
-        M.append(self._hebbian(
+        # Update episodic buffers
+        M = [self._episodic_store(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+        M.append(self._episodic_store(
             M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
-            do_hierarchical=False
         ))
 
-        # Update transition error EMA based on observation prediction error
+        # Update transition error EMA based on transition prediction error
+        # Use g_gen pathway: decode g_gen through memory to get prediction
+        # that does NOT see the current observation.
         with torch.no_grad():
-            x_pred_mu, _ = self._gen_x(p_inf)  # [batch, obs_dim]
+            p_gen_for_ema = self._gen_p(g_gen, M_prev[0])
+            x_pred_mu, _ = self._gen_x(p_gen_for_ema)  # [batch, obs_dim]
             obs_err = torch.mean(torch.abs(x_pred_mu - obs), dim=-1, keepdim=True)  # [batch, 1]
             terr = [obs_err.expand(-1, self.cfg['n_g'][f]) for f in range(n_f)]
             if transition_err_ema is not None:
@@ -423,21 +447,20 @@ class TEMModel(nn.Module):
         # Generative: predict observation from inferred state
         x_gen, p_gen = self._generative(M_prev, p_inf, g_inf, g_gen)
 
-        # Update Hebbian memory
-        M = [self._hebbian(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
-        # Inference memory (separate from generative)
-        M.append(self._hebbian(
+        # Update episodic buffers
+        M = [self._episodic_store(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+        M.append(self._episodic_store(
             M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
-            do_hierarchical=False
         ))
 
         # Compute losses
         L = self._loss(g_gen, g_gen_sigma, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x)
 
-        # Update transition error EMA based on observation prediction error
-        # (measures actual prediction accuracy against ground truth, not internal consistency)
+        # Update transition error EMA based on transition prediction error
+        # Uses g_gen pathway (x_gen[2][0]) which predicts WITHOUT seeing current obs,
+        # so this signal is strong when the transition model is wrong.
         with torch.no_grad():
-            x_pred_mu = x_gen[0][0]  # [batch, obs_dim] from inferred p pathway
+            x_pred_mu = x_gen[2][0]  # [batch, obs_dim] from g_gen (transition) pathway
             obs_err = torch.mean(torch.abs(x_pred_mu - obs), dim=-1, keepdim=True)  # [batch, 1]
             terr = [obs_err.expand(-1, self.cfg['n_g'][f]) for f in range(n_f)]
             if transition_err_ema is not None:
@@ -468,7 +491,7 @@ class TEMModel(nn.Module):
         x_ = self._x2x_(x_f)
 
         # Retrieve grounded location from inference memory
-        p_x = self._attractor(x_, M_prev[1], cfg['p_retrieve_mask_inf'])
+        p_x = self._episodic_retrieve(x_, M_prev[1], cfg['p_retrieve_mask_inf'])
 
         # Infer abstract state: precision-weighted combination of
         # path integration (g_gen), memory retrieval (g_mem), and direct observation (g_obs)
@@ -555,7 +578,7 @@ class TEMModel(nn.Module):
     def _gen_p(self, g, M_prev):
         """Retrieve grounded location from memory using abstract state as cue."""
         g_ = self._g2g_(g)
-        mu_p = self._attractor(g_, M_prev, self.cfg['p_retrieve_mask_gen'])
+        mu_p = self._episodic_retrieve(g_, M_prev, self.cfg['p_retrieve_mask_gen'])
         return mu_p
 
     def _gen_x(self, p_list):
@@ -657,43 +680,113 @@ class TEMModel(nn.Module):
         return leaky_relu(torch.tanh(p))
 
     # ====================================================================
-    # Hebbian memory and attractor dynamics
+    # Episodic memory and retrieval
     # ====================================================================
 
-    def _attractor(self, p_query, M, retrieve_mask):
-        """Pattern completion via attractor dynamics in Hebbian memory."""
+    def _init_episodic_buffer(self, batch_size):
+        """Create an empty episodic buffer."""
+        K = self.cfg.get('episodic_capacity', 50)
+        n_p_total = sum(self.cfg['n_p'])
+        return {
+            'keys':      torch.zeros(batch_size, K, n_p_total, device=self.device),
+            'values':    torch.zeros(batch_size, K, n_p_total, device=self.device),
+            'count':     torch.zeros(batch_size, dtype=torch.long, device=self.device),
+            'write_idx': torch.zeros(batch_size, dtype=torch.long, device=self.device),
+        }
+
+    def _episodic_store(self, M_buf, p_key, p_value, do_hierarchical=True):
+        """Store (key, value) pair in episodic buffer. Replaces _hebbian."""
+        # Ablation: eta=0 means no memory writes
+        if self.cfg['eta'] == 0:
+            return M_buf
+
+        batch_size = p_key.shape[0]
+        K = self.cfg.get('episodic_capacity', 50)
+
+        # Clone to avoid in-place modification (autograd safety)
+        new_keys = M_buf['keys'].clone()
+        new_values = M_buf['values'].clone()
+        new_count = M_buf['count'].clone()
+        new_write_idx = M_buf['write_idx'].clone()
+
+        # Vectorized circular write
+        b_idx = torch.arange(batch_size, device=self.device)
+        new_keys[b_idx, new_write_idx] = p_key
+        new_values[b_idx, new_write_idx] = p_value
+
+        new_write_idx = (new_write_idx + 1) % K
+        new_count = torch.clamp(new_count + 1, max=K)
+
+        return {
+            'keys': new_keys,
+            'values': new_values,
+            'count': new_count,
+            'write_idx': new_write_idx,
+        }
+
+    def _episodic_retrieve(self, p_query, M_buf, retrieve_mask):
+        """Attention-based retrieval from episodic buffer. Replaces _attractor."""
         cfg = self.cfg
-        h_t = torch.cat(p_query, dim=1)
-        h_t = self._f_p(h_t)
 
-        for tau in range(cfg['i_attractor']):
-            mask = retrieve_mask[tau]
-            h_t = ((1 - mask) * h_t +
-                    mask * self._f_p(
-                        cfg['kappa'] * h_t +
-                        torch.squeeze(torch.matmul(h_t.unsqueeze(1), M), 1)
-                    ))
+        # Concatenate query across frequency modules
+        q = torch.cat(p_query, dim=1)  # [batch, n_p_total]
+        q = self._f_p(q)
 
-        # Split back into frequency modules
+        keys = M_buf['keys']       # [batch, K, n_p_total]
+        values = M_buf['values']   # [batch, K, n_p_total]
+        count = M_buf['count']     # [batch]
+
         n_p = np.cumsum(np.concatenate(([0], cfg['n_p'])))
-        return [h_t[:, n_p[f]:n_p[f+1]] for f in range(cfg['n_f'])]
+        K = keys.shape[1]
+        batch_size = q.shape[0]
 
-    def _hebbian(self, M_prev, p_inferred, p_generated, do_hierarchical=True):
-        """Hebbian memory update: M = lambda * M + eta * (p+p^)(p-p^)^T."""
-        cfg = self.cfg
-        M_new = torch.bmm(
-            (p_inferred + p_generated).unsqueeze(2),
-            (p_inferred - p_generated).unsqueeze(1)
-        )
-        if do_hierarchical:
-            M_new = M_new * cfg['p_update_mask']
-        M = cfg['lambda_'] * M_prev + cfg['eta'] * M_new
-        # Frobenius normalization: cap total memory magnitude
-        # while preserving associative structure (replaces entry-wise clamp)
-        max_norm = cfg.get('hebbian_max_norm', 50.0)
-        frob = torch.norm(M, p='fro', dim=(-2, -1), keepdim=True)
-        M = torch.where(frob > max_norm, M * (max_norm / (frob + 1e-8)), M)
-        return M
+        # Compute per-module blend weights from retrieve mask structure
+        blend_weights = []
+        for f in range(cfg['n_f']):
+            active_iters = sum(1 for mask in retrieve_mask if mask[n_p[f]].item() > 0)
+            blend_weights.append(active_iters / cfg['i_attractor'])
+
+        # Handle fully empty buffers (all batch elements)
+        if count.max().item() == 0:
+            return [q[:, n_p[f]:n_p[f+1]] for f in range(cfg['n_f'])]
+
+        # Temperature-scaled dot-product attention
+        temp = torch.exp(self.log_attn_temp)
+        d = q.shape[1]
+        scale = (d ** 0.5) * temp
+
+        scores = torch.bmm(keys, q.unsqueeze(2)).squeeze(2) / scale  # [batch, K]
+
+        # Mask unused slots
+        slot_indices = torch.arange(K, device=q.device).unsqueeze(0)  # [1, K]
+        valid_mask = slot_indices < count.unsqueeze(1)                  # [batch, K]
+        scores = scores.masked_fill(~valid_mask, float('-inf'))
+
+        # Per-batch has_entries mask for consistent empty-buffer fallback
+        has_entries = (count > 0).float().unsqueeze(1)  # [batch, 1]
+
+        attn = F.softmax(scores, dim=1)  # [batch, K]
+        # Replace NaN from all-inf rows (empty buffers) with zeros
+        attn = torch.nan_to_num(attn, nan=0.0)
+
+        retrieved = torch.bmm(attn.unsqueeze(1), values).squeeze(1)  # [batch, n_p_total]
+        retrieved = self._f_p(retrieved)
+
+        # Hierarchical blending with query-memory interpolation
+        # For inference: blend_weights = [1.0, 1.0, 1.0, 1.0] → alpha capped at 0.5
+        # so the query always contributes at least 50% (prevents discarding sensory signal)
+        # For generative: blend_weights = [1.0, 0.75, 0.5, 0.25] → alpha scaled proportionally
+        max_memory_weight = 0.5  # cap memory influence to preserve query signal
+        result = []
+        for f in range(cfg['n_f']):
+            q_f = q[:, n_p[f]:n_p[f+1]]
+            r_f = retrieved[:, n_p[f]:n_p[f+1]]
+            alpha = blend_weights[f] * max_memory_weight
+            # For empty-buffer batch elements, use pure query (has_entries=0 → blended=q_f)
+            blended = (1 - alpha) * q_f + alpha * r_f
+            result.append(has_entries * blended + (1 - has_entries) * q_f)
+
+        return result
 
     # ====================================================================
     # Loss computation
@@ -759,12 +852,8 @@ class TEMModel(nn.Module):
         cfg = self.cfg
         n_f = cfg['n_f']
 
-        # Empty Hebbian memories
-        n_p_total = sum(cfg['n_p'])
-        M = [
-            torch.zeros(batch_size, n_p_total, n_p_total, device=self.device),
-            torch.zeros(batch_size, n_p_total, n_p_total, device=self.device),
-        ]
+        # Empty episodic buffers
+        M = [self._init_episodic_buffer(batch_size), self._init_episodic_buffer(batch_size)]
 
         # Prior on abstract state
         g_inf = [self.g_init[f].unsqueeze(0).expand(batch_size, -1).clone() for f in range(n_f)]

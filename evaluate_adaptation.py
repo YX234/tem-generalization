@@ -1,7 +1,7 @@
 """
 Evaluate TEM adaptation to novel environments.
 
-Measures how quickly the TEM's Hebbian memory and precision weighting
+Measures how quickly the TEM's episodic memory and precision weighting
 adapt to held-out physics configurations, using observation prediction
 MSE as the core metric.
 
@@ -112,11 +112,7 @@ def run_episode(model, env, normalizer, device, max_steps=200):
     obs_tensor = torch.tensor(obs_normed, dtype=torch.float, device=device).unsqueeze(0)
 
     # Initialize TEM state
-    n_p_total = sum(cfg['n_p'])
-    M = [
-        torch.zeros(1, n_p_total, n_p_total, device=device),
-        torch.zeros(1, n_p_total, n_p_total, device=device),
-    ]
+    M = [model._init_episodic_buffer(1), model._init_episodic_buffer(1)]
     g_inf = [model.g_init[f].detach().unsqueeze(0).clone() for f in range(n_f)]
     x_inf = [torch.zeros(1, cfg['n_x_f'][f], device=device) for f in range(n_f)]
     transition_err_ema = None
@@ -142,15 +138,14 @@ def run_episode(model, env, normalizer, device, max_steps=200):
             mse_pred = torch.mean((x_gen[2][0] - obs_tensor) ** 2).cpu().item()
             mses_pred.append(mse_pred)
 
-            # Update Hebbian memory
-            M_new = [model._hebbian(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
-            M_new.append(model._hebbian(
+            # Update episodic buffers
+            M_new = [model._episodic_store(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+            M_new.append(model._episodic_store(
                 M[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
-                do_hierarchical=False
             ))
 
             # Update transition error EMA based on observation prediction error
-            x_pred_mu = x_gen[0][0]  # [1, obs_dim]
+            x_pred_mu = x_gen[2][0]  # [1, obs_dim] from g_gen (transition prediction)
             obs_err = torch.mean(torch.abs(x_pred_mu - obs_tensor), dim=-1, keepdim=True)
             terr = [obs_err.expand(-1, cfg['n_g'][f]) for f in range(n_f)]
             if transition_err_ema is not None:
@@ -216,11 +211,7 @@ def run_mid_episode_change(model, env, normalizer, device, change_step,
 
     params_before = env.body_params.copy()
 
-    n_p_total = sum(cfg['n_p'])
-    M = [
-        torch.zeros(1, n_p_total, n_p_total, device=device),
-        torch.zeros(1, n_p_total, n_p_total, device=device),
-    ]
+    M = [model._init_episodic_buffer(1), model._init_episodic_buffer(1)]
     g_inf = [model.g_init[f].detach().unsqueeze(0).clone() for f in range(n_f)]
     x_inf = [torch.zeros(1, cfg['n_x_f'][f], device=device) for f in range(n_f)]
     transition_err_ema = None
@@ -250,13 +241,12 @@ def run_mid_episode_change(model, env, normalizer, device, change_step,
             mses_recon.append(torch.mean((x_gen[0][0] - obs_tensor) ** 2).cpu().item())
             mses_pred.append(torch.mean((x_gen[2][0] - obs_tensor) ** 2).cpu().item())
 
-            M_new = [model._hebbian(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
-            M_new.append(model._hebbian(
+            M_new = [model._episodic_store(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
+            M_new.append(model._episodic_store(
                 M[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
-                do_hierarchical=False
             ))
 
-            x_pred_mu = x_gen[0][0]  # [1, obs_dim]
+            x_pred_mu = x_gen[2][0]  # [1, obs_dim] from g_gen (transition prediction)
             obs_err = torch.mean(torch.abs(x_pred_mu - obs_tensor), dim=-1, keepdim=True)
             terr = [obs_err.expand(-1, cfg['n_g'][f]) for f in range(n_f)]
             if transition_err_ema is not None:

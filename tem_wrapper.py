@@ -14,25 +14,20 @@ from environment import DomainRandomizedHopper
 @dataclasses.dataclass
 class TEMState:
     """TEM internal state carried between RL steps."""
-    M: list       # [M_gen, M_inf] Hebbian memories
+    M: list       # [M_gen, M_inf] episodic buffer dicts
     x_inf: list   # n_f filtered observation tensors
     g_inf: list   # n_f abstract state tensors
     transition_err_ema: list  # n_f transition error EMA tensors (or None)
 
     @staticmethod
     def initial(model):
-        """Create fresh TEM state: zero memory, prior g, zero x_inf."""
+        """Create fresh TEM state: empty buffers, prior g, zero x_inf."""
         cfg = model.cfg
-        device = model.device
         n_f = cfg['n_f']
-        n_p_total = sum(cfg['n_p'])
         return TEMState(
-            M=[
-                torch.zeros(1, n_p_total, n_p_total, device=device),
-                torch.zeros(1, n_p_total, n_p_total, device=device),
-            ],
+            M=[model._init_episodic_buffer(1), model._init_episodic_buffer(1)],
             g_inf=[model.g_init[f].detach().unsqueeze(0).clone() for f in range(n_f)],
-            x_inf=[torch.zeros(1, cfg['n_x_f'][f], device=device) for f in range(n_f)],
+            x_inf=[torch.zeros(1, cfg['n_x_f'][f], device=model.device) for f in range(n_f)],
             transition_err_ema=None,
         )
 
@@ -41,7 +36,7 @@ class TEMObservationEnv(gym.Env):
     """Gymnasium env wrapping Hopper + frozen TEM.
 
     Returns g_inf (abstract state, 54-dim) as observations.
-    Manages TEM internal state (Hebbian memory, temporal filtering)
+    Manages TEM internal state (episodic memory, temporal filtering)
     across steps and episode boundaries.
     """
 

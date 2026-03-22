@@ -31,12 +31,15 @@ def make_config():
     # -- Transition model
     cfg['d_hidden_dim'] = 128  # direct delta prediction allows larger hidden layer
 
-    # -- Hebbian memory
-    cfg['eta'] = 0.1          # rate of remembering (was 0.5 — lower prevents saturation)
-    cfg['lambda_'] = 0.995    # rate of forgetting (was 0.9999 — half-life ~139 steps enables turnover)
-    cfg['hebbian_max_norm'] = 50.0  # Frobenius norm cap on memory matrix
-    cfg['kappa'] = 0.8        # attractor decay
-    cfg['i_attractor'] = cfg['n_f']  # attractor iterations = number of freq modules
+    # -- Episodic buffer memory (replaces Hebbian associative memory)
+    cfg['episodic_capacity'] = 50     # K: max buffer entries (FIFO when full)
+    cfg['episodic_attn_init_temp'] = 1.0  # initial attention temperature
+
+    # -- Legacy Hebbian config (kept for ablation compatibility)
+    cfg['eta'] = 0.1          # controls whether memory writes happen (0 = no-memory ablation)
+    cfg['lambda_'] = 0.995    # unused by episodic buffer (FIFO handles forgetting)
+    cfg['kappa'] = 0.8        # unused by episodic buffer
+    cfg['i_attractor'] = cfg['n_f']  # used to compute retrieval blend weights
 
     # -- Hierarchical connectivity: low freq -> high freq
     # g_connections[f_to][f_from] = True if f_from can influence f_to
@@ -47,7 +50,7 @@ def make_config():
 
     # -- Memory masks for hierarchical retrieval
     n_p = np.cumsum(np.concatenate(([0], cfg['n_p'])))
-    # Hebbian update mask: connections from low to high frequency
+    # Hierarchical update mask: connections from low to high frequency
     cfg['p_update_mask'] = torch.zeros((sum(cfg['n_p']), sum(cfg['n_p'])), dtype=torch.float)
     for f_from in range(cfg['n_f']):
         for f_to in range(cfg['n_f']):
@@ -116,7 +119,7 @@ def make_config():
     # -- Loss ramp-up iterations
     cfg['loss_weights_p_g_it'] = 2000
     cfg['loss_weights_g_it'] = 5000  # delay transition model; let memory establish first
-    cfg['loss_weights_reg_p_it'] = float('inf')  # never remove p sparsity — Hebbian memory needs it
+    cfg['loss_weights_reg_p_it'] = float('inf')  # never remove p sparsity — memory retrieval needs it
     cfg['loss_weights_reg_g_it'] = float('inf')  # never ramp down g regularization
     cfg['eta_it'] = 1500          # memory writes at full strength by iter 1500
     cfg['lambda_it'] = 200
@@ -193,7 +196,7 @@ def iteration_params(iteration, cfg):
 
     L_x_mse = cfg['loss_weights_x_mse']
     L_g_inv = cfg['loss_weights_g_inv']
-    loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse, L_g_inv])
+    loss_weights = torch.tensor([L_p_g, L_p_x, L_x_gen, L_x_g, L_x_p, L_g, L_reg_g, L_reg_p, L_x_mse, L_g_inv], dtype=torch.float)
 
     return eta, lamb, p2g_scale_offset, lr, loss_weights
 
