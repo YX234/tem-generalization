@@ -122,7 +122,8 @@ def run_episode(model, env, normalizer, device, max_steps=200):
     transition_err_ema = None
     a_prev = None
 
-    mses = []
+    mses_recon = []
+    mses_pred = []
     ema_vals = []
 
     for step in range(max_steps):
@@ -134,10 +135,12 @@ def run_episode(model, env, normalizer, device, max_steps=200):
             )
             x_gen, p_gen = model._generative(M, p_inf, g_new, g_gen)
 
-            # Observation prediction MSE (from inferred p pathway)
-            mu_pred = x_gen[0][0]
-            mse = torch.mean((mu_pred - obs_tensor) ** 2).cpu().item()
-            mses.append(mse)
+            # Reconstruction MSE: from p_inf (sees current obs — tests encoding quality)
+            mse_recon = torch.mean((x_gen[0][0] - obs_tensor) ** 2).cpu().item()
+            mses_recon.append(mse_recon)
+            # Prediction MSE: from g_gen (transition model — tests dynamics learning)
+            mse_pred = torch.mean((x_gen[2][0] - obs_tensor) ** 2).cpu().item()
+            mses_pred.append(mse_pred)
 
             # Update Hebbian memory
             M_new = [model._hebbian(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
@@ -178,7 +181,9 @@ def run_episode(model, env, normalizer, device, max_steps=200):
             transition_err_ema = new_ema
 
     return {
-        'mse': np.array(mses),
+        'mse': np.array(mses_recon),
+        'mse_recon': np.array(mses_recon),
+        'mse_pred': np.array(mses_pred),
         'transition_err_ema': np.array(ema_vals),
     }
 
@@ -221,7 +226,8 @@ def run_mid_episode_change(model, env, normalizer, device, change_step,
     transition_err_ema = None
     a_prev = None
 
-    mses = []
+    mses_recon = []
+    mses_pred = []
     ema_vals = []
     params_after = None
 
@@ -241,8 +247,8 @@ def run_mid_episode_change(model, env, normalizer, device, change_step,
             )
             x_gen, p_gen = model._generative(M, p_inf, g_new, g_gen)
 
-            mse = torch.mean((x_gen[0][0] - obs_tensor) ** 2).cpu().item()
-            mses.append(mse)
+            mses_recon.append(torch.mean((x_gen[0][0] - obs_tensor) ** 2).cpu().item())
+            mses_pred.append(torch.mean((x_gen[2][0] - obs_tensor) ** 2).cpu().item())
 
             M_new = [model._hebbian(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
             M_new.append(model._hebbian(
@@ -275,7 +281,9 @@ def run_mid_episode_change(model, env, normalizer, device, change_step,
             transition_err_ema = new_ema
 
     return {
-        'mse': np.array(mses),
+        'mse': np.array(mses_recon),
+        'mse_recon': np.array(mses_recon),
+        'mse_pred': np.array(mses_pred),
         'transition_err_ema': np.array(ema_vals),
         'change_step': change_step,
         'params_before': params_before,
@@ -376,24 +384,32 @@ def main():
 
         # Aggregate adaptation curves (pad shorter episodes)
         max_len = max(len(r['mse']) for r in episode_results)
-        mse_matrix = np.full((args.n_episodes, max_len), np.nan)
+        mse_recon_matrix = np.full((args.n_episodes, max_len), np.nan)
+        mse_pred_matrix = np.full((args.n_episodes, max_len), np.nan)
         ema_matrix = np.full((args.n_episodes, max_len), np.nan)
         for i, r in enumerate(episode_results):
-            mse_matrix[i, :len(r['mse'])] = r['mse']
+            mse_recon_matrix[i, :len(r['mse_recon'])] = r['mse_recon']
+            mse_pred_matrix[i, :len(r['mse_pred'])] = r['mse_pred']
             ema_matrix[i, :len(r['transition_err_ema'])] = r['transition_err_ema']
 
-        mean_mse = np.nanmean(mse_matrix, axis=0)
+        mean_mse_recon = np.nanmean(mse_recon_matrix, axis=0)
+        mean_mse_pred = np.nanmean(mse_pred_matrix, axis=0)
         mean_ema = np.nanmean(ema_matrix, axis=0)
 
-        metrics = compute_metrics(mean_mse)
-        print(f"  mse_step_1:  {metrics['mse_step_1']:.4f}")
-        print(f"  mse_step_10: {metrics['mse_step_10']:.4f}")
-        print(f"  mse_step_50: {metrics['mse_step_50']:.4f}")
-        print(f"  mse_asymptotic: {metrics['mse_asymptotic']:.4f}")
+        metrics_recon = compute_metrics(mean_mse_recon)
+        metrics_pred = compute_metrics(mean_mse_pred)
+        print(f"  recon mse_step_1:  {metrics_recon['mse_step_1']:.4f}  |  pred: {metrics_pred['mse_step_1']:.4f}")
+        print(f"  recon mse_step_10: {metrics_recon['mse_step_10']:.4f}  |  pred: {metrics_pred['mse_step_10']:.4f}")
+        print(f"  recon mse_step_50: {metrics_recon['mse_step_50']:.4f}  |  pred: {metrics_pred['mse_step_50']:.4f}")
+        print(f"  recon mse_asymp:   {metrics_recon['mse_asymptotic']:.4f}  |  pred: {metrics_pred['mse_asymptotic']:.4f}")
 
         all_results[env_name] = {
-            'metrics': metrics,
-            'mean_mse_curve': mean_mse.tolist(),
+            'metrics_recon': metrics_recon,
+            'metrics_pred': metrics_pred,
+            'metrics': metrics_recon,  # backward compat
+            'mean_mse_recon_curve': mean_mse_recon.tolist(),
+            'mean_mse_pred_curve': mean_mse_pred.tolist(),
+            'mean_mse_curve': mean_mse_recon.tolist(),  # backward compat
             'mean_ema_curve': mean_ema.tolist(),
         }
 
@@ -417,18 +433,26 @@ def main():
                     env.close()
 
                 max_len = max(len(r['mse']) for r in episode_results)
-                mse_matrix = np.full((args.n_episodes, max_len), np.nan)
+                mse_recon_matrix = np.full((args.n_episodes, max_len), np.nan)
+                mse_pred_matrix = np.full((args.n_episodes, max_len), np.nan)
                 for i, r in enumerate(episode_results):
-                    mse_matrix[i, :len(r['mse'])] = r['mse']
+                    mse_recon_matrix[i, :len(r['mse_recon'])] = r['mse_recon']
+                    mse_pred_matrix[i, :len(r['mse_pred'])] = r['mse_pred']
 
-                mean_mse = np.nanmean(mse_matrix, axis=0)
-                metrics = compute_metrics(mean_mse)
-                print(f"  {env_name}: mse_50={metrics['mse_step_50']:.4f} "
-                      f"mse_asymp={metrics['mse_asymptotic']:.4f}")
+                mean_recon = np.nanmean(mse_recon_matrix, axis=0)
+                mean_pred = np.nanmean(mse_pred_matrix, axis=0)
+                metrics_recon = compute_metrics(mean_recon)
+                metrics_pred = compute_metrics(mean_pred)
+                print(f"  {env_name}: recon_50={metrics_recon['mse_step_50']:.4f} "
+                      f"pred_50={metrics_pred['mse_step_50']:.4f} "
+                      f"pred_asymp={metrics_pred['mse_asymptotic']:.4f}")
 
                 ablation_results[env_name] = {
-                    'metrics': metrics,
-                    'mean_mse_curve': mean_mse.tolist(),
+                    'metrics': metrics_recon,
+                    'metrics_pred': metrics_pred,
+                    'mean_mse_recon_curve': mean_recon.tolist(),
+                    'mean_mse_pred_curve': mean_pred.tolist(),
+                    'mean_mse_curve': mean_recon.tolist(),
                 }
 
             all_results[f'ablation_{ablation}'] = ablation_results
@@ -495,37 +519,42 @@ def main():
                 env.close()
 
             max_len = max(len(r['mse']) for r in episode_results)
-            mse_matrix = np.full((args.n_episodes, max_len), np.nan)
+            mse_recon_matrix = np.full((args.n_episodes, max_len), np.nan)
+            mse_pred_matrix = np.full((args.n_episodes, max_len), np.nan)
             ema_matrix = np.full((args.n_episodes, max_len), np.nan)
             for i, r in enumerate(episode_results):
-                mse_matrix[i, :len(r['mse'])] = r['mse']
+                mse_recon_matrix[i, :len(r['mse_recon'])] = r['mse_recon']
+                mse_pred_matrix[i, :len(r['mse_pred'])] = r['mse_pred']
                 ema_matrix[i, :len(r['transition_err_ema'])] = r['transition_err_ema']
 
-            mean_mse = np.nanmean(mse_matrix, axis=0)
+            mean_mse_recon = np.nanmean(mse_recon_matrix, axis=0)
+            mean_mse_pred = np.nanmean(mse_pred_matrix, axis=0)
             mean_ema = np.nanmean(ema_matrix, axis=0)
 
-            # Metrics: before change, at spike, and after recovery
-            pre_mse = float(np.nanmean(mean_mse[max(0, change_step-20):change_step]))
-            if change_step + 5 <= len(mean_mse):
-                spike_mse = float(np.nanmax(mean_mse[change_step:change_step+20]))
+            # Metrics: before change, at spike, and after recovery (on prediction MSE)
+            pre_mse = float(np.nanmean(mean_mse_pred[max(0, change_step-20):change_step]))
+            if change_step + 5 <= len(mean_mse_pred):
+                spike_mse = float(np.nanmax(mean_mse_pred[change_step:change_step+20]))
             else:
                 spike_mse = float('nan')
-            if change_step + 50 <= len(mean_mse):
-                recovery_mse = float(np.nanmean(mean_mse[change_step+50:change_step+100]))
+            if change_step + 50 <= len(mean_mse_pred):
+                recovery_mse = float(np.nanmean(mean_mse_pred[change_step+50:change_step+100]))
             else:
                 recovery_mse = float('nan')
 
-            print(f"  pre-change MSE:  {pre_mse:.4f}")
-            print(f"  spike MSE:       {spike_mse:.4f}")
-            print(f"  recovery MSE:    {recovery_mse:.4f}")
-            print(f"  spike ratio:     {spike_mse / (pre_mse + 1e-8):.2f}x")
+            print(f"  pre-change pred MSE:  {pre_mse:.4f}")
+            print(f"  spike pred MSE:       {spike_mse:.4f}")
+            print(f"  recovery pred MSE:    {recovery_mse:.4f}")
+            print(f"  spike ratio:          {spike_mse / (pre_mse + 1e-8):.2f}x")
 
             mid_results[change_name] = {
                 'change_step': change_step,
                 'pre_mse': pre_mse,
                 'spike_mse': spike_mse,
                 'recovery_mse': recovery_mse,
-                'mean_mse_curve': mean_mse.tolist(),
+                'mean_mse_recon_curve': mean_mse_recon.tolist(),
+                'mean_mse_pred_curve': mean_mse_pred.tolist(),
+                'mean_mse_curve': mean_mse_recon.tolist(),
                 'mean_ema_curve': mean_ema.tolist(),
             }
 

@@ -32,8 +32,9 @@ def make_config():
     cfg['d_hidden_dim'] = 128  # direct delta prediction allows larger hidden layer
 
     # -- Hebbian memory
-    cfg['eta'] = 0.5          # rate of remembering
-    cfg['lambda_'] = 0.9999   # rate of forgetting
+    cfg['eta'] = 0.1          # rate of remembering (was 0.5 — lower prevents saturation)
+    cfg['lambda_'] = 0.995    # rate of forgetting (was 0.9999 — half-life ~139 steps enables turnover)
+    cfg['hebbian_max_norm'] = 50.0  # Frobenius norm cap on memory matrix
     cfg['kappa'] = 0.8        # attractor decay
     cfg['i_attractor'] = cfg['n_f']  # attractor iterations = number of freq modules
 

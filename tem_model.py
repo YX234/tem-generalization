@@ -687,10 +687,12 @@ class TEMModel(nn.Module):
         )
         if do_hierarchical:
             M_new = M_new * cfg['p_update_mask']
-        M = torch.clamp(
-            cfg['lambda_'] * M_prev + cfg['eta'] * M_new,
-            -1, 1
-        )
+        M = cfg['lambda_'] * M_prev + cfg['eta'] * M_new
+        # Frobenius normalization: cap total memory magnitude
+        # while preserving associative structure (replaces entry-wise clamp)
+        max_norm = cfg.get('hebbian_max_norm', 50.0)
+        frob = torch.norm(M, p='fro', dim=(-2, -1), keepdim=True)
+        M = torch.where(frob > max_norm, M * (max_norm / (frob + 1e-8)), M)
         return M
 
     # ====================================================================
