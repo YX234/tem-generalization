@@ -214,12 +214,36 @@ def main():
                 pickle.dump(normalizer, f)
             logger.info(f"  Saved checkpoint at iteration {iteration}")
 
+            # Sync to Google Drive if mounted (Colab persistence)
+            drive_dir = os.environ.get('TEM_DRIVE_DIR')
+            if drive_dir and os.path.isdir(drive_dir):
+                import shutil
+                drive_model_path = os.path.join(drive_dir, 'models')
+                os.makedirs(drive_model_path, exist_ok=True)
+                for fname in [f'tem_{iteration}.pt', f'cfg_{iteration}.pt', f'normalizer_{iteration}.pkl']:
+                    shutil.copy2(os.path.join(model_path, fname), drive_model_path)
+                logger.info(f"  Synced checkpoint to Google Drive")
+
     # Final save
     torch.save(model.state_dict(), os.path.join(model_path, f'tem_final.pt'))
     torch.save(cfg, os.path.join(model_path, f'cfg_final.pt'))
     with open(os.path.join(model_path, 'normalizer_final.pkl'), 'wb') as f:
         pickle.dump(normalizer, f)
     logger.info("Training complete.")
+
+    # Final sync to Google Drive
+    drive_dir = os.environ.get('TEM_DRIVE_DIR')
+    if drive_dir and os.path.isdir(drive_dir):
+        import shutil
+        drive_model_path = os.path.join(drive_dir, 'models')
+        os.makedirs(drive_model_path, exist_ok=True)
+        for fname in ['tem_final.pt', 'cfg_final.pt', 'normalizer_final.pkl']:
+            shutil.copy2(os.path.join(model_path, fname), drive_model_path)
+        # Also copy training log
+        log_file = os.path.join(run_path, 'train.log')
+        if os.path.exists(log_file):
+            shutil.copy2(log_file, drive_dir)
+        logger.info("Final checkpoint synced to Google Drive.")
 
     # Cleanup
     writer.close()
