@@ -314,6 +314,15 @@ def main():
             }, ckpt_path)
             logger.info(f"  Saved checkpoint: {ckpt_path}")
 
+            # Sync to Google Drive if mounted (Colab persistence)
+            drive_dir = os.environ.get('TEM_DRIVE_DIR')
+            if drive_dir and os.path.isdir(drive_dir):
+                import shutil
+                drive_rl_path = os.path.join(drive_dir, 'rl_policy')
+                os.makedirs(drive_rl_path, exist_ok=True)
+                shutil.copy2(ckpt_path, drive_rl_path)
+                logger.info(f"  Synced RL checkpoint to Google Drive")
+
     # Final save
     final_path = os.path.join(run_path, 'policy_final.pt')
     torch.save({
@@ -324,6 +333,19 @@ def main():
         'rl_cfg': rl_cfg,
     }, final_path)
     logger.info(f"Training complete. Final policy saved to {final_path}")
+
+    # Final sync to Google Drive
+    drive_dir = os.environ.get('TEM_DRIVE_DIR')
+    if drive_dir and os.path.isdir(drive_dir):
+        import shutil
+        drive_rl_path = os.path.join(drive_dir, 'rl_policy')
+        os.makedirs(drive_rl_path, exist_ok=True)
+        shutil.copy2(final_path, drive_rl_path)
+        # Also copy training log
+        log_file = os.path.join(run_path, 'train_rl.log')
+        if os.path.exists(log_file):
+            shutil.copy2(log_file, drive_rl_path)
+        logger.info("Final RL policy synced to Google Drive.")
 
     # Cleanup
     writer.close()
