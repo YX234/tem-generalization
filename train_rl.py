@@ -110,8 +110,10 @@ def main():
     logger.info(f"Loading TEM from {args.model_dir}")
     tem, tem_cfg, normalizer = load_tem(args.model_dir, device)
     g_dim = sum(tem_cfg['n_g'])
+    n_f = tem_cfg['n_f']
+    obs_dim = g_dim + n_f  # g_inf (54) + per-module EMA (4)
     action_dim = tem_cfg['action_dim']
-    logger.info(f"TEM loaded: g_dim={g_dim}, device={device}")
+    logger.info(f"TEM loaded: g_dim={g_dim}, ema_dim={n_f}, obs_dim={obs_dim}, device={device}")
     logger.info(f"Normalizer: {normalizer.count} observations seen during training")
 
     # Create wrapped environments
@@ -124,14 +126,14 @@ def main():
         envs.append(TEMObservationEnv(env_cfg, tem, normalizer, device, seed=args.seed + i))
     logger.info(f"Created {n_envs} domain-randomized environments")
 
-    # Policy
-    policy = ActorCritic(g_dim, action_dim, rl_cfg['hidden_dim']).to(device)
+    # Policy (input: g_inf 54-dim + per-module EMA 4-dim = 58-dim)
+    policy = ActorCritic(obs_dim, action_dim, rl_cfg['hidden_dim']).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=rl_cfg['lr'], eps=1e-5)
     total_policy_params = sum(p.numel() for p in policy.parameters())
     logger.info(f"Policy parameters: {total_policy_params:,}")
 
     # Initialize environments
-    current_obs = np.zeros((n_envs, g_dim), dtype=np.float32)
+    current_obs = np.zeros((n_envs, obs_dim), dtype=np.float32)
     for i, env in enumerate(envs):
         current_obs[i], _ = env.reset()
 
@@ -153,7 +155,7 @@ def main():
         update_start = time.time()
 
         # -- Rollout collection --
-        all_obs = np.zeros((n_steps, n_envs, g_dim), dtype=np.float32)
+        all_obs = np.zeros((n_steps, n_envs, obs_dim), dtype=np.float32)
         all_actions = np.zeros((n_steps, n_envs, action_dim), dtype=np.float32)
         all_log_probs = np.zeros((n_steps, n_envs), dtype=np.float32)
         all_values = np.zeros((n_steps, n_envs), dtype=np.float32)

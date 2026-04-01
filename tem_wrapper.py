@@ -1,6 +1,6 @@
 """
 Gymnasium environment wrapper that runs frozen TEM inference.
-Exposes abstract state g_inf as observations for RL policy training.
+Exposes abstract state g_inf + adaptation signals as observations for RL policy training.
 """
 
 import dataclasses
@@ -35,7 +35,12 @@ class TEMState:
 class TEMObservationEnv(gym.Env):
     """Gymnasium env wrapping Hopper + frozen TEM.
 
-    Returns g_inf (abstract state, 54-dim) as observations.
+    Returns [g_inf, ema_per_module] as observations:
+    - g_inf: 54-dim abstract state (physics-invariant)
+    - ema_per_module: 4-dim per-module mean transition error EMA
+      (adaptation signal — high values indicate novel/mismatched physics)
+
+    Total observation: 58-dim.
     Manages TEM internal state (episodic memory, temporal filtering)
     across steps and episode boundaries.
     """
@@ -46,10 +51,12 @@ class TEMObservationEnv(gym.Env):
         self.tem = tem_model
         self.normalizer = normalizer
         self.device = device
+        self._n_f = tem_model.cfg['n_f']
         self._g_dim = sum(tem_model.cfg['n_g'])
+        self._obs_dim = self._g_dim + self._n_f  # g_inf (54) + EMA per module (4)
 
         self.observation_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(self._g_dim,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(self._obs_dim,), dtype=np.float32
         )
         self.action_space = self.hopper.action_space
         self.state = None
@@ -66,7 +73,7 @@ class TEMObservationEnv(gym.Env):
             )
         self.state = TEMState(M=M, x_inf=x_inf, g_inf=g_inf,
                               transition_err_ema=new_ema)
-        return self._g_to_numpy(g_inf), info
+        return self._obs_to_numpy(g_inf, new_ema), info
 
     def step(self, action):
         obs_raw, reward, terminated, truncated, info = self.hopper.step(action)
@@ -84,7 +91,7 @@ class TEMObservationEnv(gym.Env):
             )
         self.state = TEMState(M=M, x_inf=x_inf, g_inf=g_inf,
                               transition_err_ema=new_ema)
-        return self._g_to_numpy(g_inf), reward, terminated, truncated, info
+        return self._obs_to_numpy(g_inf, new_ema), reward, terminated, truncated, info
 
     def _normalize_to_tensor(self, obs_raw):
         obs_normed = self.normalizer.normalize(obs_raw)
@@ -92,8 +99,16 @@ class TEMObservationEnv(gym.Env):
             obs_normed, dtype=torch.float, device=self.device
         ).unsqueeze(0)
 
-    def _g_to_numpy(self, g_inf):
-        return torch.cat(g_inf, dim=1).squeeze(0).cpu().numpy()
+    def _obs_to_numpy(self, g_inf, ema):
+        """Concatenate g_inf (54-dim) with per-module mean EMA (4-dim)."""
+        g = torch.cat(g_inf, dim=1).squeeze(0)  # (54,)
+        if ema is not None:
+            ema_per_module = torch.stack(
+                [ema[f].mean() for f in range(self._n_f)]
+            )  # (4,)
+        else:
+            ema_per_module = torch.zeros(self._n_f, device=self.device)
+        return torch.cat([g, ema_per_module]).cpu().numpy()  # (58,)
 
     def close(self):
         self.hopper.close()
