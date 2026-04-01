@@ -346,6 +346,9 @@ def main():
                 'rl_cfg': rl_cfg,
                 'obs_dim': obs_dim,
             }, ckpt_path)
+            # Save normalizer with each checkpoint so evaluation works even if training is stopped early
+            with open(os.path.join(run_path, 'normalizer.pkl'), 'wb') as f:
+                pickle.dump(normalizer, f)
             logger.info(f"  Saved checkpoint: {ckpt_path}")
 
             # Sync to Google Drive if mounted (Colab persistence)
