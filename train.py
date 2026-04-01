@@ -8,6 +8,8 @@ import os
 import time
 import logging
 import pickle
+import glob
+import argparse
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -31,7 +33,24 @@ def setup_logging(run_path):
     return logger
 
 
+def find_latest_checkpoint(model_dir):
+    """Find the highest-numbered checkpoint in a directory."""
+    ckpts = sorted(glob.glob(os.path.join(model_dir, 'tem_*.pt')))
+    # Filter out tem_final.pt
+    ckpts = [c for c in ckpts if 'final' not in os.path.basename(c)]
+    if not ckpts:
+        return None, None
+    latest = ckpts[-1]
+    idx = int(os.path.basename(latest).replace('tem_', '').replace('.pt', ''))
+    return latest, idx
+
+
 def main():
+    parser = argparse.ArgumentParser(description='Train TEM world model')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Path to models/ directory to resume from (e.g. Drive checkpoint)')
+    args = parser.parse_args()
+
     # Setup
     cfg = make_config()
     np.random.seed(0)
@@ -44,6 +63,16 @@ def main():
         device = torch.device('mps')
     else:
         device = torch.device('cpu')
+
+    # Auto-resume: if --resume not given, check Drive for existing checkpoint
+    resume_dir = args.resume
+    if resume_dir is None:
+        drive_dir = os.environ.get('TEM_DRIVE_DIR')
+        if drive_dir:
+            drive_models = os.path.join(drive_dir, 'models')
+            ckpt_path, _ = find_latest_checkpoint(drive_models) if os.path.isdir(drive_models) else (None, None)
+            if ckpt_path is not None:
+                resume_dir = drive_models
 
     # Create output directories — use fixed path on Colab to avoid nested-clone issues
     if os.path.isdir('/content'):
@@ -67,12 +96,38 @@ def main():
     model = TEMModel(cfg, device=device).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg['lr_max'])
 
+    # Resume from checkpoint if available
+    start_iteration = 0
+    if resume_dir is not None:
+        ckpt_path, ckpt_iter = find_latest_checkpoint(resume_dir)
+        if ckpt_path is not None:
+            model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
+            # Load optimizer state if saved
+            opt_path = os.path.join(resume_dir, f'optimizer_{ckpt_iter}.pt')
+            if os.path.exists(opt_path):
+                optimizer.load_state_dict(torch.load(opt_path, map_location=device, weights_only=True))
+            start_iteration = ckpt_iter + 1
+            logger.info(f"Resumed from {ckpt_path} (iteration {ckpt_iter}), "
+                        f"starting at iteration {start_iteration}")
+        else:
+            logger.info(f"No checkpoint found in {resume_dir}, training from scratch")
+
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Model parameters: {total_params:,}")
 
     # Create environments with domain randomization
     envs = [DomainRandomizedHopper(cfg, seed=i) for i in range(cfg['batch_size'])]
-    normalizer = RunningNormalizer(cfg['obs_dim'])
+
+    # Load normalizer from checkpoint if resuming, otherwise create fresh
+    normalizer = None
+    if resume_dir is not None and start_iteration > 0:
+        norm_path = os.path.join(resume_dir, f'normalizer_{start_iteration - 1}.pkl')
+        if os.path.exists(norm_path):
+            with open(norm_path, 'rb') as f:
+                normalizer = pickle.load(f)
+            logger.info(f"Normalizer loaded ({normalizer.count} observations)")
+    if normalizer is None:
+        normalizer = RunningNormalizer(cfg['obs_dim'])
 
     # Stagger environments to de-synchronize episode boundaries.
     # Without this, all envs reset at the same time, creating
@@ -99,7 +154,7 @@ def main():
     cfg['lambda_target'] = cfg['lambda_']
 
     # Training loop
-    for iteration in range(cfg['train_iterations']):
+    for iteration in range(start_iteration, cfg['train_iterations']):
         start_time = time.time()
 
         # Get iteration-dependent parameters
@@ -214,6 +269,7 @@ def main():
         if iteration % cfg['save_interval'] == 0:
             torch.save(model.state_dict(), os.path.join(model_path, f'tem_{iteration}.pt'))
             torch.save(cfg, os.path.join(model_path, f'cfg_{iteration}.pt'))
+            torch.save(optimizer.state_dict(), os.path.join(model_path, f'optimizer_{iteration}.pt'))
             with open(os.path.join(model_path, f'normalizer_{iteration}.pkl'), 'wb') as f:
                 pickle.dump(normalizer, f)
             logger.info(f"  Saved checkpoint at iteration {iteration}")
@@ -224,7 +280,8 @@ def main():
                 import shutil
                 drive_model_path = os.path.join(drive_dir, 'models')
                 os.makedirs(drive_model_path, exist_ok=True)
-                for fname in [f'tem_{iteration}.pt', f'cfg_{iteration}.pt', f'normalizer_{iteration}.pkl']:
+                for fname in [f'tem_{iteration}.pt', f'cfg_{iteration}.pt',
+                              f'optimizer_{iteration}.pt', f'normalizer_{iteration}.pkl']:
                     shutil.copy2(os.path.join(model_path, fname), drive_model_path)
                 logger.info(f"  Synced checkpoint to Google Drive")
 
