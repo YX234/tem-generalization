@@ -98,9 +98,13 @@ def main():
     else:
         device = torch.device('cpu')
 
-    # Output directory
-    run_path = os.path.join(os.path.dirname(__file__), 'runs_rl',
+    # Output directory — always use a fixed path to avoid nested-clone issues
+    run_path = os.path.join('/content/tem-generalization', 'runs_rl',
                             time.strftime('%Y-%m-%d_%H-%M-%S'))
+    # Fall back to relative path if not on Colab
+    if not os.path.isdir('/content'):
+        run_path = os.path.join(os.path.dirname(__file__), 'runs_rl',
+                                time.strftime('%Y-%m-%d_%H-%M-%S'))
     os.makedirs(run_path, exist_ok=True)
 
     logger = setup_logging(run_path)
@@ -316,13 +320,15 @@ def main():
             }, ckpt_path)
             logger.info(f"  Saved checkpoint: {ckpt_path}")
 
-            # Sync to Google Drive if mounted (Colab persistence)
+            # Sync to Google Drive — overwrite policy_latest.pt each time
             drive_dir = os.environ.get('TEM_DRIVE_DIR')
             if drive_dir and os.path.isdir(drive_dir):
                 import shutil
                 drive_rl_path = os.path.join(drive_dir, 'rl_policy')
                 os.makedirs(drive_rl_path, exist_ok=True)
-                shutil.copy2(ckpt_path, drive_rl_path)
+                # Overwrite latest (single file, always up to date)
+                shutil.copy2(ckpt_path,
+                             os.path.join(drive_rl_path, 'policy_latest.pt'))
                 logger.info(f"  Synced RL checkpoint to Google Drive")
 
     # Final save
@@ -336,13 +342,14 @@ def main():
     }, final_path)
     logger.info(f"Training complete. Final policy saved to {final_path}")
 
-    # Final sync to Google Drive
+    # Final sync to Google Drive — overwrite latest
     drive_dir = os.environ.get('TEM_DRIVE_DIR')
     if drive_dir and os.path.isdir(drive_dir):
         import shutil
         drive_rl_path = os.path.join(drive_dir, 'rl_policy')
         os.makedirs(drive_rl_path, exist_ok=True)
-        shutil.copy2(final_path, drive_rl_path)
+        shutil.copy2(final_path,
+                     os.path.join(drive_rl_path, 'policy_latest.pt'))
         # Also copy training log
         log_file = os.path.join(run_path, 'train_rl.log')
         if os.path.exists(log_file):
