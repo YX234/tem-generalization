@@ -54,16 +54,19 @@ class TEMObservationEnv(gym.Env):
         self._n_f = tem_model.cfg['n_f']
         self._g_dim = sum(tem_model.cfg['n_g'])
         self._obs_dim = self._g_dim + self._n_f  # g_inf (54) + EMA per module (4)
+        self._ema_scale = 0.3  # scale EMA (~2.5-3.8) into [-1, 1] range to match g_inf
 
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(self._obs_dim,), dtype=np.float32
         )
         self.action_space = self.hopper.action_space
         self.state = None
+        self._step_count = 0
 
     def reset(self, *, seed=None, options=None):
         obs_raw, info = self.hopper.reset()
         self.state = TEMState.initial(self.tem)
+        self._step_count = 0
 
         obs_tensor = self._normalize_to_tensor(obs_raw)
         with torch.no_grad():
@@ -73,7 +76,8 @@ class TEMObservationEnv(gym.Env):
             )
         self.state = TEMState(M=M, x_inf=x_inf, g_inf=g_inf,
                               transition_err_ema=new_ema)
-        return self._obs_to_numpy(g_inf, new_ema), info
+        # Return zeros for EMA on first step — no real transition prediction exists yet
+        return self._obs_to_numpy(g_inf, ema=None), info
 
     def step(self, action):
         obs_raw, reward, terminated, truncated, info = self.hopper.step(action)
@@ -91,7 +95,10 @@ class TEMObservationEnv(gym.Env):
             )
         self.state = TEMState(M=M, x_inf=x_inf, g_inf=g_inf,
                               transition_err_ema=new_ema)
-        return self._obs_to_numpy(g_inf, new_ema), reward, terminated, truncated, info
+        self._step_count += 1
+        # Expose EMA after step 2 (need at least one real transition prediction)
+        ema_for_obs = new_ema if self._step_count >= 2 else None
+        return self._obs_to_numpy(g_inf, ema_for_obs), reward, terminated, truncated, info
 
     def _normalize_to_tensor(self, obs_raw):
         obs_normed = self.normalizer.normalize(obs_raw)
@@ -100,12 +107,17 @@ class TEMObservationEnv(gym.Env):
         ).unsqueeze(0)
 
     def _obs_to_numpy(self, g_inf, ema):
-        """Concatenate g_inf (54-dim) with per-module mean EMA (4-dim)."""
+        """Concatenate g_inf (54-dim) with scaled per-module mean EMA (4-dim).
+
+        EMA values (~2.5-3.8) are scaled by _ema_scale (0.3) to bring them
+        into a similar range as g_inf ([-1, 1]), preventing the EMA features
+        from dominating the first linear layer at initialization.
+        """
         g = torch.cat(g_inf, dim=1).squeeze(0)  # (54,)
         if ema is not None:
             ema_per_module = torch.stack(
                 [ema[f].mean() for f in range(self._n_f)]
-            )  # (4,)
+            ) * self._ema_scale  # (4,), scaled to ~[0.75, 1.14]
         else:
             ema_per_module = torch.zeros(self._n_f, device=self.device)
         return torch.cat([g, ema_per_module]).cpu().numpy()  # (58,)
