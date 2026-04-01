@@ -54,7 +54,7 @@ class TEMObservationEnv(gym.Env):
         self._n_f = tem_model.cfg['n_f']
         self._g_dim = sum(tem_model.cfg['n_g'])
         self._obs_dim = self._g_dim + self._n_f  # g_inf (54) + EMA per module (4)
-        self._ema_scale = 0.3  # scale EMA (~2.5-3.8) into [-1, 1] range to match g_inf
+        self._ema_scale = 1.0  # g-space EMA (~0.1-1.0) already in similar range as g_inf [-1, 1]
 
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(self._obs_dim,), dtype=np.float32
@@ -117,7 +117,7 @@ class TEMObservationEnv(gym.Env):
         if ema is not None:
             ema_per_module = torch.stack(
                 [ema[f].mean() for f in range(self._n_f)]
-            ) * self._ema_scale  # (4,), scaled to ~[0.75, 1.14]
+            ) * self._ema_scale  # (4,), g-space EMA in ~[0, 1] range
         else:
             ema_per_module = torch.zeros(self._n_f, device=self.device)
         return torch.cat([g, ema_per_module]).cpu().numpy()  # (58,)

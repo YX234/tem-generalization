@@ -417,14 +417,9 @@ class TEMModel(nn.Module):
             M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
         ))
 
-        # Update transition error EMA based on transition prediction error
-        # Use g_gen pathway: decode g_gen through memory to get prediction
-        # that does NOT see the current observation.
+        # Update transition error EMA: per-neuron g-space prediction error
         with torch.no_grad():
-            p_gen_for_ema = self._gen_p(g_gen, M_prev[0])
-            x_pred_mu, _ = self._gen_x(p_gen_for_ema)  # [batch, obs_dim]
-            obs_err = torch.mean(torch.abs(x_pred_mu - obs), dim=-1, keepdim=True)  # [batch, 1]
-            terr = [obs_err.expand(-1, self.cfg['n_g'][f]) for f in range(n_f)]
+            terr = [torch.abs(g_gen[f] - g_inf[f]) for f in range(n_f)]
             if transition_err_ema is not None:
                 decay = self.cfg['transition_err_ema_decay']
                 new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
@@ -456,13 +451,11 @@ class TEMModel(nn.Module):
         # Compute losses
         L = self._loss(g_gen, g_gen_sigma, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x)
 
-        # Update transition error EMA based on transition prediction error
-        # Uses g_gen pathway (x_gen[2][0]) which predicts WITHOUT seeing current obs,
-        # so this signal is strong when the transition model is wrong.
+        # Update transition error EMA: per-neuron g-space prediction error.
+        # g_gen (transition prediction, no current obs) vs g_inf (observation-informed).
+        # In-distribution: g_gen ≈ g_inf → low EMA. OOD: g_gen ≠ g_inf → high EMA.
         with torch.no_grad():
-            x_pred_mu = x_gen[2][0]  # [batch, obs_dim] from g_gen (transition) pathway
-            obs_err = torch.mean(torch.abs(x_pred_mu - obs), dim=-1, keepdim=True)  # [batch, 1]
-            terr = [obs_err.expand(-1, self.cfg['n_g'][f]) for f in range(n_f)]
+            terr = [torch.abs(g_gen[f] - g_inf[f]) for f in range(n_f)]
             if transition_err_ema is not None:
                 decay = self.cfg['transition_err_ema_decay']
                 new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
@@ -695,7 +688,13 @@ class TEMModel(nn.Module):
         }
 
     def _episodic_store(self, M_buf, p_key, p_value, do_hierarchical=True):
-        """Store (key, value) pair in episodic buffer. Replaces _hebbian."""
+        """Store (key, value) pair in episodic buffer. Replaces _hebbian.
+
+        Novelty gate: only writes when the new key is sufficiently different
+        from all existing entries (cosine distance > threshold). This prevents
+        the buffer from filling with near-identical entries from consecutive
+        timesteps, maintaining diverse keys for meaningful retrieval.
+        """
         # Ablation: eta=0 means no memory writes
         if self.cfg['eta'] == 0:
             return M_buf
@@ -709,13 +708,30 @@ class TEMModel(nn.Module):
         new_count = M_buf['count'].clone()
         new_write_idx = M_buf['write_idx'].clone()
 
-        # Vectorized circular write
-        b_idx = torch.arange(batch_size, device=self.device)
-        new_keys[b_idx, new_write_idx] = p_key
-        new_values[b_idx, new_write_idx] = p_value
+        # Novelty gate: skip write if key is too similar to existing entries
+        novelty_thresh = self.cfg.get('episodic_novelty_threshold', 0.0)
+        if novelty_thresh > 0:
+            keys_n = F.normalize(new_keys, dim=2)           # [batch, K, D]
+            p_key_n = F.normalize(p_key, dim=1)             # [batch, D]
+            sims = torch.bmm(keys_n, p_key_n.unsqueeze(2)).squeeze(2)  # [batch, K]
+            # Mask empty slots so they don't count as similar
+            slot_idx = torch.arange(K, device=p_key.device).unsqueeze(0)
+            valid = slot_idx < new_count.unsqueeze(1)
+            sims = sims.masked_fill(~valid, -1.0)
+            max_sim = sims.max(dim=1).values                # [batch]
+            should_write = (max_sim < (1.0 - novelty_thresh)) | (new_count == 0)
+        else:
+            should_write = torch.ones(batch_size, dtype=torch.bool, device=self.device)
 
-        new_write_idx = (new_write_idx + 1) % K
-        new_count = torch.clamp(new_count + 1, max=K)
+        # Vectorized circular write (only for novel entries)
+        b_idx = torch.arange(batch_size, device=self.device)
+        new_keys[b_idx, new_write_idx] = torch.where(
+            should_write.unsqueeze(1), p_key, new_keys[b_idx, new_write_idx])
+        new_values[b_idx, new_write_idx] = torch.where(
+            should_write.unsqueeze(1), p_value, new_values[b_idx, new_write_idx])
+
+        new_write_idx = torch.where(should_write, (new_write_idx + 1) % K, new_write_idx)
+        new_count = torch.where(should_write, torch.clamp(new_count + 1, max=K), new_count)
 
         return {
             'keys': new_keys,

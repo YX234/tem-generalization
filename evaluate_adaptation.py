@@ -144,12 +144,10 @@ def run_episode(model, env, normalizer, device, max_steps=200):
                 M[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
             ))
 
-            # Update transition error EMA based on observation prediction error
-            x_pred_mu = x_gen[2][0]  # [1, obs_dim] from g_gen (transition prediction)
-            obs_err = torch.mean(torch.abs(x_pred_mu - obs_tensor), dim=-1, keepdim=True)
-            terr = [obs_err.expand(-1, cfg['n_g'][f]) for f in range(n_f)]
+            # Update transition error EMA: per-neuron g-space prediction error
+            terr = [torch.abs(g_gen[f] - g_new[f]) for f in range(n_f)]
             if transition_err_ema is not None:
-                decay = cfg['transition_err_ema_decay']
+                decay = cfg.get('transition_err_ema_decay', 0.95)
                 new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
                            for f in range(n_f)]
             else:
@@ -246,11 +244,10 @@ def run_mid_episode_change(model, env, normalizer, device, change_step,
                 M[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
             ))
 
-            x_pred_mu = x_gen[2][0]  # [1, obs_dim] from g_gen (transition prediction)
-            obs_err = torch.mean(torch.abs(x_pred_mu - obs_tensor), dim=-1, keepdim=True)
-            terr = [obs_err.expand(-1, cfg['n_g'][f]) for f in range(n_f)]
+            # Update transition error EMA: per-neuron g-space prediction error
+            terr = [torch.abs(g_gen[f] - g_new[f]) for f in range(n_f)]
             if transition_err_ema is not None:
-                decay = cfg['transition_err_ema_decay']
+                decay = cfg.get('transition_err_ema_decay', 0.95)
                 new_ema = [decay * transition_err_ema[f] + (1 - decay) * terr[f]
                            for f in range(n_f)]
             else:

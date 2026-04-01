@@ -45,9 +45,13 @@ def main():
     else:
         device = torch.device('cpu')
 
-    # Create output directories
-    run_path = os.path.join(os.path.dirname(__file__), 'runs',
-                            time.strftime('%Y-%m-%d_%H-%M-%S'))
+    # Create output directories — use fixed path on Colab to avoid nested-clone issues
+    if os.path.isdir('/content'):
+        run_path = os.path.join('/content/tem-generalization', 'runs',
+                                time.strftime('%Y-%m-%d_%H-%M-%S'))
+    else:
+        run_path = os.path.join(os.path.dirname(__file__), 'runs',
+                                time.strftime('%Y-%m-%d_%H-%M-%S'))
     model_path = os.path.join(run_path, 'models')
     os.makedirs(model_path, exist_ok=True)
 

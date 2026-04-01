@@ -34,6 +34,7 @@ def make_config():
     # -- Episodic buffer memory (replaces Hebbian associative memory)
     cfg['episodic_capacity'] = 50     # K: max buffer entries (FIFO when full)
     cfg['episodic_attn_init_temp'] = 1.0  # initial attention temperature
+    cfg['episodic_novelty_threshold'] = 0.1  # min cosine distance to write (0 = write every step)
 
     # -- Legacy Hebbian config (kept for ablation compatibility)
     cfg['eta'] = 0.1          # controls whether memory writes happen (0 = no-memory ablation)
@@ -150,9 +151,9 @@ def make_config():
     cfg['eval_mass_range'] = (4.0, 8.0)
 
     # -- Sigma floor: minimum transition uncertainty (prevents sigma collapse)
-    cfg['sigma_g_floor'] = 0.5       # transition: lowest precision (max = 1/0.5^2 = 4.0)
+    cfg['sigma_g_floor'] = 0.1       # transition: precision can reach 1/0.1^2 = 100 when confident
     cfg['sigma_g_obs_floor'] = 0.2   # observation: highest precision (max = 1/0.2^2 = 25.0)
-    cfg['sigma_g_mem_floor'] = 0.35  # memory: middle precision (max = 1/0.35^2 ≈ 8.2)
+    cfg['sigma_g_mem_floor'] = 0.1   # memory: precision can reach 1/0.1^2 = 100 when confident
     cfg['sigma_x_floor'] = 0.2  # decoder floor: effective sigma_min ≈ 0.6 (prevents NLL gradient explosion)
 
     # -- Transition error EMA for adaptive precision weighting
