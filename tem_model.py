@@ -525,8 +525,9 @@ class TEMModel(nn.Module):
     def _gen_g(self, a_prev, g_prev, transition_err_ema=None):
         """State-dependent transition: g_new = tanh(g_old + delta(a, g_connected, ema_context)).
 
-        When transition_err_ema is provided, it conditions both the delta prediction
-        and the uncertainty estimate, enabling online adaptation to physics changes."""
+        When transition_err_ema is provided, it conditions the delta prediction
+        for online adaptation. Transition uncertainty (sigma) is hard-wired from
+        EMA: sigma = EMA + floor, guaranteeing correct OOD extrapolation."""
         cfg = self.cfg
         n_f = cfg['n_f']
 
@@ -556,15 +557,16 @@ class TEMModel(nn.Module):
 
         g_step = [torch.tanh(g_prev[f] + delta[f]) for f in range(n_f)]
 
-        # Transition uncertainty — conditioned on recent prediction accuracy
+        # Transition uncertainty — hard-wired from EMA.
+        # sigma scales directly with prediction error: high EMA → high sigma → distrust transition.
+        # This replaces a learned MLP that collapsed to a constant in practice,
+        # because all training environments are in-distribution (narrow EMA range)
+        # and the network couldn't extrapolate to OOD EMA values at test time.
+        floor = cfg.get('sigma_g_floor', 0.1)
         if transition_err_ema is not None:
-            sigma_input = [torch.cat([g_prev[f], transition_err_ema[f]], dim=1)
-                           for f in range(n_f)]
+            sigma_g = [transition_err_ema[f] + floor for f in range(n_f)]
         else:
-            sigma_input = [torch.cat([g_prev[f], torch.zeros_like(g_prev[f])], dim=1)
-                           for f in range(n_f)]
-        sigma_g = self.MLP_sigma_g_path(sigma_input)
-        sigma_g = [s + cfg.get('sigma_g_floor', 0.3) for s in sigma_g]
+            sigma_g = [torch.full_like(g_prev[f], floor) for f in range(n_f)]
 
         return g_step, sigma_g
 
