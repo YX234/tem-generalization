@@ -138,11 +138,10 @@ def run_episode(model, env, normalizer, device, max_steps=200):
             mse_pred = torch.mean((x_gen[2][0] - obs_tensor) ** 2).cpu().item()
             mses_pred.append(mse_pred)
 
-            # Update episodic buffers
-            M_new = [model._episodic_store(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
-            M_new.append(model._episodic_store(
-                M[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
-            ))
+            # Update episodic buffers — fresh p_inf as both key and value
+            p_inf_cat = torch.cat(p_inf, dim=1)
+            M_new = [model._episodic_store(M[0], p_inf_cat, p_inf_cat)]
+            M_new.append(model._episodic_store(M[1], p_inf_cat, p_inf_cat))
 
             # Update transition error EMA: per-neuron g-space prediction error
             terr = [torch.abs(g_gen[f] - g_new[f]) for f in range(n_f)]
@@ -239,10 +238,10 @@ def run_mid_episode_change(model, env, normalizer, device, change_step,
             mses_recon.append(torch.mean((x_gen[0][0] - obs_tensor) ** 2).cpu().item())
             mses_pred.append(torch.mean((x_gen[2][0] - obs_tensor) ** 2).cpu().item())
 
-            M_new = [model._episodic_store(M[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
-            M_new.append(model._episodic_store(
-                M[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
-            ))
+            # Update episodic buffers — fresh p_inf as both key and value
+            p_inf_cat = torch.cat(p_inf, dim=1)
+            M_new = [model._episodic_store(M[0], p_inf_cat, p_inf_cat)]
+            M_new.append(model._episodic_store(M[1], p_inf_cat, p_inf_cat))
 
             # Update transition error EMA: per-neuron g-space prediction error
             terr = [torch.abs(g_gen[f] - g_new[f]) for f in range(n_f)]

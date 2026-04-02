@@ -408,14 +408,10 @@ class TEMModel(nn.Module):
             obs, M_prev, x_prev, (g_gen, g_gen_sigma)
         )
 
-        # Memory retrieval for update (skip full _generative / decoder)
-        p_gen = self._gen_p(g_inf, M_prev[0])
-
-        # Update episodic buffers
-        M = [self._episodic_store(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
-        M.append(self._episodic_store(
-            M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
-        ))
+        # Update episodic buffers — fresh p_inf as both key and value
+        p_inf_cat = torch.cat(p_inf, dim=1)
+        M = [self._episodic_store(M_prev[0], p_inf_cat, p_inf_cat)]
+        M.append(self._episodic_store(M_prev[1], p_inf_cat, p_inf_cat))
 
         # Update transition error EMA: per-neuron g-space prediction error
         with torch.no_grad():
@@ -442,11 +438,10 @@ class TEMModel(nn.Module):
         # Generative: predict observation from inferred state
         x_gen, p_gen = self._generative(M_prev, p_inf, g_inf, g_gen)
 
-        # Update episodic buffers
-        M = [self._episodic_store(M_prev[0], torch.cat(p_inf, dim=1), torch.cat(p_gen, dim=1))]
-        M.append(self._episodic_store(
-            M_prev[1], torch.cat(p_inf, dim=1), torch.cat(p_inf_x, dim=1),
-        ))
+        # Update episodic buffers — fresh p_inf as both key and value
+        p_inf_cat = torch.cat(p_inf, dim=1)
+        M = [self._episodic_store(M_prev[0], p_inf_cat, p_inf_cat)]
+        M.append(self._episodic_store(M_prev[1], p_inf_cat, p_inf_cat))
 
         # Compute losses
         L = self._loss(g_gen, g_gen_sigma, p_gen, x_gen, obs, g_inf, p_inf, p_inf_x)
@@ -787,20 +782,28 @@ class TEMModel(nn.Module):
         # Replace NaN from all-inf rows (empty buffers) with zeros
         attn = torch.nan_to_num(attn, nan=0.0)
 
+        # Retrieval confidence from attention sharpness (entropy-based).
+        # confidence=0 when attention is uniform (no good match → don't blend),
+        # confidence=1 when attention is sharp (strong match → blend fully).
+        attn_entropy = -torch.sum(attn * torch.log(attn + 1e-8), dim=1)  # [batch]
+        max_entropy = torch.log(count.float().clamp(min=2))               # [batch]
+        confidence = torch.where(
+            count > 1,
+            (1.0 - attn_entropy / max_entropy.clamp(min=0.01)).clamp(0, 1),
+            torch.zeros_like(attn_entropy)
+        )  # [batch]
+
         retrieved = torch.bmm(attn.unsqueeze(1), values).squeeze(1)  # [batch, n_p_total]
         retrieved = self._f_p(retrieved)
 
-        # Hierarchical blending with query-memory interpolation
-        # For inference: blend_weights = [1.0, 1.0, 1.0, 1.0] → alpha capped at 0.5
-        # so the query always contributes at least 50% (prevents discarding sensory signal)
-        # For generative: blend_weights = [1.0, 0.75, 0.5, 0.25] → alpha scaled proportionally
-        max_memory_weight = 0.5  # cap memory influence to preserve query signal
+        # Confidence-gated blending: memory weight scales with retrieval quality.
+        # Sharp attention (good match) → full blend. Diffuse attention → pure query.
+        max_memory_weight = 0.5
         result = []
         for f in range(cfg['n_f']):
             q_f = q[:, n_p[f]:n_p[f+1]]
             r_f = retrieved[:, n_p[f]:n_p[f+1]]
-            alpha = blend_weights[f] * max_memory_weight
-            # For empty-buffer batch elements, use pure query (has_entries=0 → blended=q_f)
+            alpha = blend_weights[f] * max_memory_weight * confidence.unsqueeze(1)
             blended = (1 - alpha) * q_f + alpha * r_f
             result.append(has_entries * blended + (1 - has_entries) * q_f)
 

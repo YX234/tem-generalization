@@ -153,7 +153,7 @@ def make_config():
     # -- Sigma floor: minimum transition uncertainty (prevents sigma collapse)
     cfg['sigma_g_floor'] = 0.1       # transition: precision can reach 1/0.1^2 = 100 when confident
     cfg['sigma_g_obs_floor'] = 0.2   # observation: highest precision (max = 1/0.2^2 = 25.0)
-    cfg['sigma_g_mem_floor'] = 0.1   # memory: precision can reach 1/0.1^2 = 100 when confident
+    cfg['sigma_g_mem_floor'] = 0.35  # memory: supplementary signal, precision max ≈ 8.2 (below obs=25, transition=100)
     cfg['sigma_x_floor'] = 0.2  # decoder floor: effective sigma_min ≈ 0.6 (prevents NLL gradient explosion)
 
     # -- Transition error EMA for adaptive precision weighting
